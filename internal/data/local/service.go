@@ -3,8 +3,8 @@ package local
 import (
 	"database/sql"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
 	"github.com/dropbox/godropbox/time2"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
 )
 
 type Service struct {

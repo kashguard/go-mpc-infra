@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"allaboutapps.dev/aw/go-starter/internal/mailer/transport"
-	"allaboutapps.dev/aw/go-starter/internal/push/provider"
-	"allaboutapps.dev/aw/go-starter/internal/util"
+	"github.com/kashguard/go-mpc-wallet/internal/mailer/transport"
+	"github.com/kashguard/go-mpc-wallet/internal/push/provider"
+	"github.com/kashguard/go-mpc-wallet/internal/util"
 	"github.com/rs/zerolog"
 	"golang.org/x/text/language"
 )
@@ -101,6 +101,37 @@ type I18n struct {
 	BundleDirAbs    string
 }
 
+type MPC struct {
+	NodeType            string
+	NodeID              string
+	CoordinatorEndpoint string
+
+	// 存储配置
+	StorageBackend        string
+	RedisEndpoint         string
+	KeyShareStoragePath   string
+	KeyShareEncryptionKey string
+
+	// 协议配置
+	SupportedProtocols []string
+	DefaultProtocol    string
+
+	// 服务配置
+	HTTPPort   int
+	GRPCPort   int
+	TLSEnabled bool
+
+	// 功能配置
+	EnableAudit     bool
+	EnablePolicy    bool
+	KeyRotationDays int
+
+	// 性能配置
+	MaxConcurrentSessions int
+	MaxConcurrentSignings int
+	SessionTimeout        int
+}
+
 type Server struct {
 	Database   Database
 	Echo       EchoServer
@@ -115,6 +146,7 @@ type Server struct {
 	Push       PushService
 	FCMConfig  provider.FCMConfig
 	I18n       I18n
+	MPC        MPC
 }
 
 // DefaultServiceConfigFromEnv returns the server config as parsed from environment variables
@@ -253,6 +285,26 @@ func DefaultServiceConfigFromEnv() Server {
 		I18n: I18n{
 			DefaultLanguage: util.GetEnvAsLanguageTag("SERVER_I18N_DEFAULT_LANGUAGE", language.English),
 			BundleDirAbs:    util.GetEnv("SERVER_I18N_BUNDLE_DIR_ABS", filepath.Join(util.GetProjectRootDir(), "/web/i18n")), // /app/web/i18n
+		},
+		MPC: MPC{
+			NodeType:              util.GetEnv("MPC_NODE_TYPE", "coordinator"),
+			NodeID:                util.GetEnv("MPC_NODE_ID", ""),
+			CoordinatorEndpoint:   util.GetEnv("MPC_COORDINATOR_ENDPOINT", ""),
+			StorageBackend:        util.GetEnv("MPC_STORAGE_BACKEND", "postgresql"),
+			RedisEndpoint:         util.GetEnv("MPC_REDIS_ENDPOINT", "localhost:6379"),
+			KeyShareStoragePath:   util.GetEnv("MPC_KEY_SHARE_STORAGE_PATH", filepath.Join(util.GetProjectRootDir(), "/var/lib/mpc/key-shares")),
+			KeyShareEncryptionKey: util.GetEnv("MPC_KEY_SHARE_ENCRYPTION_KEY", ""),
+			SupportedProtocols:    util.GetEnvAsStringArr("MPC_SUPPORTED_PROTOCOLS", []string{"gg18", "gg20", "frost"}),
+			DefaultProtocol:       util.GetEnv("MPC_DEFAULT_PROTOCOL", "gg20"),
+			HTTPPort:              util.GetEnvAsInt("MPC_HTTP_PORT", 8080),
+			GRPCPort:              util.GetEnvAsInt("MPC_GRPC_PORT", 9090),
+			TLSEnabled:            util.GetEnvAsBool("MPC_TLS_ENABLED", true),
+			EnableAudit:           util.GetEnvAsBool("MPC_ENABLE_AUDIT", true),
+			EnablePolicy:          util.GetEnvAsBool("MPC_ENABLE_POLICY", true),
+			KeyRotationDays:       util.GetEnvAsInt("MPC_KEY_ROTATION_DAYS", 0),
+			MaxConcurrentSessions: util.GetEnvAsInt("MPC_MAX_CONCURRENT_SESSIONS", 100),
+			MaxConcurrentSignings: util.GetEnvAsInt("MPC_MAX_CONCURRENT_SIGNINGS", 50),
+			SessionTimeout:        util.GetEnvAsInt("MPC_SESSION_TIMEOUT", 300),
 		},
 	}
 }

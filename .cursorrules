@@ -1,0 +1,1900 @@
+# MPC 项目开发规范
+
+## 项目概述
+
+这是一个基于 go-starter 框架开发的 MPC（多方安全计算）基础设施系统，基于阈值签名技术（TSS - Threshold Signature Scheme），为 2B 和 2C 产品提供安全、可靠的密钥管理和签名服务。系统采用分布式架构，支持密钥分片、阈值签名、密钥轮换等核心功能。
+
+**核心设计原则**：
+1. **去中心化安全**：密钥分片分布式存储，无单点故障，密钥永不完整存在
+2. **协议安全**：基于成熟的密码学协议（GG18、GG20、FROST）
+3. **阈值容错**：支持 M-of-N 阈值配置，只要达到阈值即可签名
+4. **分布式架构**：Coordinator 和 Participant 节点分离，节点间对等通信
+5. **审计追踪**：所有操作记录不可篡改的审计日志
+6. **零信任架构**：不信任任何请求，所有请求都需要验证
+7. **高性能**：低延迟签名（< 200ms 目标），高吞吐量（1000+ 签名/秒）
+
+## 架构规范
+
+### 分层架构
+
+严格遵循 go-starter 的分层架构：
+
+```
+API Layer (internal/api/handlers/mpc/)
+  ↓
+Service Layer (internal/mpc/)
+  ├── coordinator/      # Coordinator 服务（协调签名流程）
+  ├── participant/      # Participant 服务（存储分片，参与签名）
+  ├── key/              # 密钥分片管理
+  ├── signing/           # 阈值签名服务
+  ├── protocol/         # 协议引擎（GG18/GG20/FROST）
+  ├── node/              # 节点管理
+  ├── session/           # 签名会话管理
+  ├── policy/            # 策略引擎
+  ├── audit/             # 审计日志
+  └── auth/              # 认证授权
+  ↓
+Model Layer (internal/models/) - SQLBoiler 生成
+  ↓
+Persistence Layer (internal/persistence/)
+  ├── Metadata Store (PostgreSQL)
+  ├── Session Store (Redis)
+  └── Key Share Storage (加密文件系统/HSM)
+```
+
+### Wire 依赖注入
+
+**必须遵循 Wire 规范**：
+
+1. **Provider 函数**：所有服务必须提供 Provider 函数
+   ```go
+   // ✅ 正确
+   func NewKeyService(db *sql.DB, hsmAdapter hsm.Adapter, metadataStore storage.MetadataStore) (*Service, error) {
+       return &Service{db: db, hsmAdapter: hsmAdapter, metadataStore: metadataStore}, nil
+   }
+   
+   // ❌ 错误 - 不要使用 Init 方法
+   func (s *Server) InitKMS() error { ... }
+   ```
+
+2. **Wire 配置**：在 `internal/api/wire.go` 中注册所有 Provider
+   ```go
+   var mpcServiceSet = wire.NewSet(
+       coordinator.NewService,
+       participant.NewService,
+       key.NewService,
+       signing.NewService,
+       protocol.NewEngine,
+       node.NewManager,
+       session.NewManager,
+       policy.NewEngine,
+       audit.NewLogger,
+       auth.NewService,
+       // ...
+   )
+   ```
+
+3. **Server 结构体**：在 `internal/api/server.go` 中声明服务字段
+   ```go
+   type Server struct {
+       // ...
+       MPC *mpc.Service `wire:"-"`
+       CoordinatorService *coordinator.Service `wire:"-"`
+       ParticipantService *participant.Service `wire:"-"`
+       KeyService *key.Service `wire:"-"`
+       SigningService *signing.Service `wire:"-"`
+       ProtocolEngine *protocol.Engine `wire:"-"`
+       NodeManager *node.Manager `wire:"-"`
+       SessionManager *session.Manager `wire:"-"`
+       PolicyEngine *policy.Engine `wire:"-"`
+       AuditLogger *audit.Logger `wire:"-"`
+   }
+   ```
+
+4. **跳过 Wire**：使用 `wire:"-"` 标记需要手动初始化的组件（如 Echo、Router）
+
+## 目录结构规范
+
+### MPC 模块结构
+
+```
+internal/mpc/
+├── coordinator/                  # Coordinator 服务
+│   ├── service.go                # CoordinatorService 主服务
+│   ├── protocol_engine.go        # 协议引擎
+│   ├── key_share_manager.go      # 密钥分片管理
+│   ├── signing_service.go        # 签名服务
+│   ├── node_manager.go           # 节点管理
+│   └── types.go
+├── participant/                  # Participant 服务
+│   ├── service.go                # ParticipantService 主服务
+│   ├── key_share_storage.go      # 密钥分片存储
+│   ├── protocol_participant.go   # 协议参与者
+│   ├── p2p_communication.go       # P2P 通信
+│   └── types.go
+├── key/                          # 密钥分片管理模块
+│   ├── service.go                # KeyService 主服务
+│   ├── dkg.go                     # 分布式密钥生成（DKG）
+│   ├── share_manager.go           # 分片管理
+│   ├── rotation.go                # 密钥轮换
+│   └── types.go
+├── signing/                      # 阈值签名服务
+│   ├── service.go                # SigningService
+│   ├── threshold_sign.go         # 阈值签名
+│   ├── batch_sign.go              # 批量签名
+│   ├── verify.go                  # 签名验证
+│   └── types.go
+├── protocol/                     # 协议引擎
+│   ├── engine.go                 # ProtocolEngine
+│   ├── gg18.go                   # GG18 协议实现
+│   ├── gg20.go                   # GG20 协议实现
+│   ├── frost.go                  # FROST 协议实现
+│   └── types.go
+├── session/                      # 签名会话管理
+│   ├── manager.go                # SessionManager
+│   ├── store.go                  # 会话存储
+│   └── types.go
+├── node/                         # 节点管理
+│   ├── manager.go                # NodeManager
+│   ├── registry.go               # 节点注册
+│   ├── discovery.go              # 节点发现
+│   └── types.go
+├── policy/                       # 策略引擎
+│   ├── engine.go                 # PolicyEngine
+│   ├── evaluator.go              # 策略评估
+│   ├── parser.go                 # 策略解析
+│   └── types.go
+├── audit/                        # 审计日志
+│   ├── logger.go                 # AuditLogger
+│   ├── storage.go                # 日志存储
+│   └── types.go
+├── auth/                         # 认证授权
+│   ├── service.go                # AuthService
+│   ├── token.go                  # Token 认证
+│   ├── certificate.go            # 证书认证
+│   └── types.go
+├── storage/                      # 存储抽象层
+│   ├── interface.go              # 存储接口定义
+│   ├── postgresql.go             # PostgreSQL 实现
+│   ├── redis.go                  # Redis 实现
+│   ├── key_share_storage.go      # 密钥分片存储
+│   └── types.go
+└── types.go
+```
+
+### API Handlers 结构
+
+```
+internal/api/handlers/mpc/
+├── keys/
+│   ├── post_create_key.go        # POST /v1/keys（创建密钥分片）
+│   ├── get_key.go                # GET /v1/keys/{key_id}
+│   ├── delete_key.go             # DELETE /v1/keys/{key_id}
+│   ├── post_rotate_key.go        # POST /v1/keys/{key_id}/rotate
+│   ├── get_list_keys.go          # GET /v1/keys
+│   └── post_generate_address.go  # POST /v1/keys/{key_id}/address
+├── signing/
+│   ├── post_sign.go              # POST /v1/sign（阈值签名）
+│   ├── post_batch_sign.go        # POST /v1/sign/batch（批量签名）
+│   └── post_verify.go            # POST /v1/verify（签名验证）
+├── nodes/
+│   ├── post_register_node.go     # POST /v1/nodes（注册节点）
+│   ├── get_node.go               # GET /v1/nodes/{node_id}
+│   ├── get_list_nodes.go         # GET /v1/nodes
+│   └── get_node_health.go        # GET /v1/nodes/{node_id}/health
+├── sessions/
+│   ├── post_create_session.go    # POST /v1/sessions（创建签名会话）
+│   ├── post_join_session.go      # POST /v1/sessions/{session_id}/join
+│   ├── get_session.go            # GET /v1/sessions/{session_id}
+│   └── post_cancel_session.go    # POST /v1/sessions/{session_id}/cancel
+├── transactions/
+│   └── post_build_transaction.go # POST /v1/transactions/build
+├── policies/
+│   ├── post_create_policy.go     # POST /v1/policies
+│   ├── get_policy.go             # GET /v1/policies/{policy_id}
+│   ├── put_update_policy.go      # PUT /v1/policies/{policy_id}
+│   └── delete_policy.go          # DELETE /v1/policies/{policy_id}
+└── audit/
+    ├── get_audit_logs.go         # GET /v1/audit-logs
+    └── post_export_audit_logs.go # POST /v1/audit-logs/export
+```
+
+**命名规范**：
+- Handler 文件：`{method}_{route_name}.go`（如 `post_create_wallet.go`）
+- Handler 函数：`{method}{RouteName}Handler`（如 `postCreateWalletHandler`）
+- Route 函数：`{Method}{RouteName}Route`（如 `PostCreateWalletRoute`）
+
+## 编码规范
+
+### Go 代码规范
+
+1. **遵循 Go 标准**：使用 `gofmt`、`golint`、`golangci-lint`
+2. **错误处理**：始终检查错误，使用 `errors.Wrap` 或 `fmt.Errorf` 添加上下文
+3. **上下文传递**：所有服务方法第一个参数必须是 `context.Context`
+4. **接口定义**：接口定义在服务包内，使用小写接口名（如 `service`），实现使用大写（如 `Service`）
+
+### 命名规范
+
+**包名**：
+- 使用小写、简短、有意义的名称
+- 避免下划线和混合大小写
+- 示例：`kms`, `key`, `encryption`, `policy`, `audit`, `hsm`
+
+**类型名**：
+- 使用驼峰命名，首字母大写（导出）
+- 接口名通常以 `er` 结尾（如 `Adapter`, `Manager`, `Engine`）
+- 示例：`KeyService`, `EncryptionService`, `PolicyEngine`, `HSMAdapter`
+
+**函数名**：
+- Provider 函数：`New{Type}`（如 `NewWalletService`）
+- 服务方法：使用动词开头（如 `CreateWallet`, `GetBalance`）
+- 私有函数：小写开头（如 `derivePrivateKey`）
+
+**变量名**：
+- 使用驼峰命名
+- 简短但有意义
+- 避免单字母变量（除了循环变量 `i`, `j`, `k`）
+
+### 错误处理
+
+#### Service 层错误处理
+
+```go
+// ✅ 正确 - 使用 errors 包
+import "github.com/pkg/errors"
+
+func (s *Service) CreateKey(ctx context.Context, req *CreateKeyRequest) (*KeyMetadata, error) {
+    // 业务验证（不是参数验证）
+    if req.KeyType != "AES_256" && req.KeyType != "RSA_2048" {
+        return nil, ErrInvalidKeyType
+    }
+    
+    // 验证权限
+    if err := s.policyEngine.EvaluatePolicy(ctx, req.PolicyID, "create_key"); err != nil {
+        return nil, errors.Wrap(err, "policy evaluation failed")
+    }
+    
+    // 在 HSM 内生成密钥
+    hsmHandle, err := s.hsmAdapter.GenerateKey(ctx, req.KeySpec)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to generate key in HSM")
+    }
+    
+    // 保存密钥元数据
+    keyMetadata := &KeyMetadata{
+        KeyID: generateKeyID(),
+        Alias: req.Alias,
+        KeyType: req.KeyType,
+        KeyState: KeyStateEnabled,
+        HSMHandle: hsmHandle,
+    }
+    
+    if err := s.metadataStore.SaveKeyMetadata(ctx, keyMetadata); err != nil {
+        return nil, errors.Wrap(err, "failed to save key metadata")
+    }
+    
+    // 记录审计日志
+    s.auditLogger.LogEvent(ctx, &AuditEvent{
+        EventType: "KeyCreated",
+        KeyID: keyMetadata.KeyID,
+        Operation: "create_key",
+        Result: "Success",
+    })
+    
+    return keyMetadata, nil
+}
+
+// ✅ 正确 - 定义错误变量
+var (
+    ErrKeyNotFound = errors.New("key not found")
+    ErrInvalidKeyType = errors.New("invalid key type")
+    ErrInvalidKeyState = errors.New("invalid key state")
+    ErrKeyDisabled = errors.New("key is disabled")
+    ErrKeyDeleted = errors.New("key is deleted")
+    ErrInvalidCiphertext = errors.New("invalid ciphertext")
+    ErrInvalidSignature = errors.New("invalid signature")
+    ErrPolicyDenied = errors.New("policy denied")
+)
+
+// ✅ 正确 - 事务处理
+func (s *Service) ProcessWithdraw(ctx context.Context, req *WithdrawRequest) error {
+    return s.db.Transaction(func(tx *sql.Tx) error {
+        // 原子操作
+        if err := s.deductBalance(ctx, tx, req); err != nil {
+            return errors.Wrap(err, "failed to deduct balance")
+        }
+        if err := s.createWithdrawRecord(ctx, tx, req); err != nil {
+            return errors.Wrap(err, "failed to create withdraw record")
+        }
+        return nil
+    })
+}
+
+// ❌ 错误 - 不要忽略错误
+result, _ := someFunction()
+```
+
+### 日志规范
+
+使用 `zerolog` 进行日志记录：
+
+```go
+import "github.com/rs/zerolog/log"
+
+// ✅ 正确 - 结构化日志
+log.Info().
+    Str("user_id", userID).
+    Str("chain_type", chainType).
+    Str("address", address).
+    Msg("Wallet created successfully")
+
+// ✅ 正确 - 错误日志
+log.Error().
+    Err(err).
+    Str("operation", "create_wallet").
+    Msg("Failed to create wallet")
+
+// ❌ 错误 - 不要使用 fmt.Printf
+fmt.Printf("Wallet created: %s\n", address)
+```
+
+**日志级别**：
+- `log.Debug()`: 详细调试信息
+- `log.Info()`: 关键操作、状态变更
+- `log.Warn()`: 警告信息、异常情况
+- `log.Error()`: 系统错误、交易失败
+
+## 安全规范
+
+### 密钥分片安全
+
+**绝对禁止**：
+- ❌ 在任何日志中记录密钥分片、完整私钥
+- ❌ 将密钥分片保存到数据库（只保存元数据和加密后的分片）
+- ❌ 密钥分片以明文形式传输或存储
+- ❌ 在错误消息中暴露敏感信息
+- ❌ 密钥分片离开节点未加密状态
+- ❌ 在任何地方完整重构私钥（除非恢复场景）
+
+**必须遵守**：
+- ✅ 密钥分片加密存储（AES-256-GCM）
+- ✅ 密钥分片分布式存储，永不完整存在
+- ✅ 使用 TLS 加密传输密钥分片
+- ✅ 所有密钥操作记录审计日志（不记录敏感内容）
+- ✅ 密码验证失败不暴露具体原因
+- ✅ 密钥分片使用后立即从内存清除
+- ✅ 支持阈值容错，只要达到阈值即可签名
+
+```go
+// ✅ 正确 - 分布式密钥生成（DKG），分片加密存储
+func (s *Service) CreateKey(ctx context.Context, req *CreateKeyRequest) (*KeyMetadata, error) {
+    // 执行分布式密钥生成协议
+    keyShares, publicKey, err := s.protocolEngine.GenerateKeyShare(ctx, req)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to generate key shares")
+    }
+    
+    // 加密并分发密钥分片到各个节点
+    for nodeID, share := range keyShares {
+        // 加密分片
+        encryptedShare, err := s.encryptKeyShare(ctx, share)
+        if err != nil {
+            return nil, errors.Wrap(err, "failed to encrypt key share")
+        }
+        
+        // 安全传输到目标节点（TLS）
+        if err := s.distributeKeyShare(ctx, nodeID, encryptedShare); err != nil {
+            return nil, errors.Wrap(err, "failed to distribute key share")
+        }
+    }
+    
+    // 只保存密钥元数据，不保存分片
+    keyMetadata := &KeyMetadata{
+        KeyID: generateKeyID(),
+        PublicKey: publicKey,
+        Threshold: req.Threshold,
+        TotalNodes: req.TotalNodes,
+        // ... 其他元数据
+    }
+    
+    return keyMetadata, nil
+}
+
+// ✅ 正确 - 阈值签名，分片不离开节点
+func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignResponse, error) {
+    // 创建签名会话
+    session, err := s.sessionManager.CreateSession(ctx, req)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to create signing session")
+    }
+    
+    // 通知参与节点加入会话
+    participatingNodes, err := s.selectParticipatingNodes(ctx, req.KeyID, req.Threshold)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to select participating nodes")
+    }
+    
+    // 执行阈值签名协议（GG18/GG20/FROST）
+    signature, err := s.protocolEngine.ThresholdSign(ctx, session.ID, participatingNodes, req.Message)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to perform threshold signing")
+    }
+    
+    // 记录审计日志（不记录消息内容）
+    s.auditLogger.LogEvent(ctx, &AuditEvent{
+        EventType: "ThresholdSign",
+        KeyID: req.KeyID,
+        SessionID: session.ID,
+        Operation: "threshold_sign",
+        Result: "Success",
+        ParticipatingNodes: participatingNodes,
+        // 不记录 req.Message
+    })
+    
+    return &SignResponse{
+        Signature: signature,
+        KeyID: req.KeyID,
+        SessionID: session.ID,
+    }, nil
+}
+```
+
+### 数据库安全
+
+- ✅ 使用参数化查询，防止 SQL 注入
+- ✅ 敏感字段加密存储
+- ✅ 数据库连接使用 TLS
+- ✅ 定期备份 keystore 表
+
+```go
+// ✅ 正确 - 参数化查询
+rows, err := db.QueryContext(ctx, 
+    "SELECT * FROM wallets WHERE user_id = $1 AND chain_type = $2",
+    userID, chainType)
+
+// ❌ 错误 - SQL 注入风险
+query := fmt.Sprintf("SELECT * FROM wallets WHERE user_id = '%s'", userID)
+```
+
+## API 接口定义规范（Swagger-First）
+
+### API 开发流程
+
+**必须遵循 Swagger-First 开发模式**：
+
+1. **定义 API 规范**（第一步）
+   - 在 `api/paths/` 中定义路径和参数
+   - 在 `api/definitions/` 中定义请求/响应类型
+   - 在 `api/config/main.yml` 中添加引用
+
+2. **生成代码**（第二步）
+   ```bash
+   make swagger  # 根据 API 定义生成 Go 类型文件
+   ```
+
+3. **实现 Handler**（第三步）
+   - 在生成的类型基础上编写 handler 逻辑
+   - 使用生成的类型，不要使用 `map[string]interface{}`
+
+### 复合响应类型定义
+
+**重要**：对于包含多个字段的复合响应，必须定义具体的类型名称：
+
+```yaml
+# ❌ 错误：匿名响应对象
+responses:
+  "200":
+    description: Success
+    schema:
+      type: object
+      properties:
+        data:
+          $ref: "#/definitions/WalletResponse"
+        balance:
+          $ref: "#/definitions/BalanceResponse"
+
+# ✅ 正确：定义具体类型名称
+WalletWithBalanceResponse:
+  type: object
+  required: [data, balance]
+  properties:
+    data:
+      $ref: "#/definitions/WalletResponse"
+    balance:
+      $ref: "#/definitions/BalanceResponse"
+```
+
+然后在 `api/config/main.yml` 中添加引用：
+```yaml
+definitions:
+  walletWithBalanceResponse:
+    $ref: "../definitions/wallet.yml#/definitions/WalletWithBalanceResponse"
+```
+
+### 参数验证策略
+
+**根据接口类型选择正确的验证方法**：
+
+```go
+// 场景1: 只有请求体 (POST /wallet/create)
+var request types.PostCreateWalletPayload
+if err := util.BindAndValidateBody(c, &request); err != nil {
+    return err
+}
+
+// 场景2: 只有路径参数 (GET /wallet/{wallet_id})
+params := wallet.NewGetWalletParams()
+if err := util.BindAndValidatePathParams(c, &params); err != nil {
+    return err
+}
+walletID := params.WalletID
+
+// 场景3: 只有查询参数 (GET /wallet/deposits?user_id=xxx)
+params := wallet.NewGetDepositsParams()
+if err := util.BindAndValidateQueryParams(c, &params); err != nil {
+    return err
+}
+
+// 场景4: 路径+查询参数 (GET /wallet/{wallet_id}/balance?token=USDT)
+params := wallet.NewGetWalletBalanceParams()
+if err := util.BindAndValidatePathAndQueryParams(c, &params); err != nil {
+    return err
+}
+
+// 场景5: 复合参数 (路径+请求体等)
+params := wallet.NewCreateWithdrawParams()
+if err := params.BindRequest(c.Request(), nil); err != nil {
+    return err  // 同时验证路径参数和请求体
+}
+walletID := params.WalletID
+request := params.Request
+```
+
+### 参数验证分层原则
+
+**重要原则**：
+- ✅ **Handler 层**：统一处理所有参数验证和类型转换
+- ❌ **Service 层**：不应包含重复的参数验证逻辑（如 `validateRequest`, `validateConfig` 等方法）
+
+```go
+// ✅ 正确 - Handler 层验证
+func postCreateWalletHandler(s *api.Server) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        var body types.PostCreateWalletPayload
+        if err := util.BindAndValidateBody(c, &body); err != nil {
+            return err  // 参数验证在 Handler 层完成
+        }
+        
+        // 直接调用 Service，不再验证
+        wallet, err := s.Wallet.CreateWallet(ctx, body.UserID, body.ChainType)
+        // ...
+    }
+}
+
+// ❌ 错误 - Service 层重复验证
+func (s *Service) CreateWallet(ctx context.Context, req *CreateWalletRequest) (*Wallet, error) {
+    // 不要在这里再次验证 req.UserID、req.ChainType 等
+    // 这些应该在 Handler 层已经验证过了
+    if err := s.validateRequest(req); err != nil {  // ❌ 不要这样做
+        return nil, err
+    }
+    // ...
+}
+```
+
+### 返回响应规范
+
+```go
+// ✅ 正确 - 使用 util.ValidateAndReturn
+response := &types.CreateWalletResponse{
+    ID: wallet.ID,
+    Address: wallet.Address,
+}
+return util.ValidateAndReturn(c, http.StatusOK, response)
+
+// ✅ 正确 - 复合响应
+response := &types.WalletWithBalanceResponse{
+    Data: walletResponse,
+    Balance: balanceResponse,
+}
+return util.ValidateAndReturn(c, http.StatusOK, response)
+
+// ❌ 错误 - 直接使用 c.JSON
+return c.JSON(http.StatusOK, response)  // 不要这样做
+```
+
+## 数据库规范
+
+### 数据库开发流程
+
+1. **编写 Migration**（第一步）
+   - 在 `migrations/` 目录下编写数据库迁移文件
+   - 文件名格式：`YYYYMMDDHHMMSS-description.sql`
+
+2. **生成代码**（第二步）
+   ```bash
+   make sql  # 根据 migrations 生成相应的 Go 文件
+   ```
+
+### SQLBoiler 模型
+
+- ✅ 所有模型由 SQLBoiler 自动生成，**不要手动修改**
+- ✅ 模型文件在 `internal/models/` 目录
+- ✅ 使用模型提供的方法进行数据库操作
+
+```go
+// ✅ 正确 - 使用 SQLBoiler 模型
+import "allaboutapps.dev/aw/go-starter/internal/models"
+
+key, err := models.Keys(
+    models.KeyWhere.KeyID.EQ(keyID),
+    models.KeyWhere.KeyState.EQ("Enabled"),
+).One(ctx, db)
+
+// ✅ 正确 - 使用模型方法
+key := &models.Key{
+    KeyID: generateKeyID(),
+    Alias: req.Alias,
+    KeyType: req.KeyType,
+    KeyState: "Enabled",
+    HSMHandle: hsmHandle,
+}
+err := key.Insert(ctx, db, boil.Infer())
+
+// ❌ 错误 - 不要直接写 SQL（除非必要）
+rows, err := db.Query("SELECT * FROM wallets WHERE ...")
+```
+
+### 数据库迁移
+
+- ✅ 迁移文件在 `migrations/` 目录
+- ✅ 文件名格式：`YYYYMMDDHHMMSS-description.sql`
+- ✅ 使用 `-- +migrate Up` 和 `-- +migrate Down` 标记
+
+```sql
+-- +migrate Up
+CREATE TABLE keys (
+    key_id VARCHAR(255) PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    algorithm VARCHAR(50) NOT NULL,
+    curve VARCHAR(50) NOT NULL,
+    threshold INTEGER NOT NULL,
+    total_nodes INTEGER NOT NULL,
+    chain_type VARCHAR(50) NOT NULL,
+    address TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'Active',
+    description TEXT,
+    tags JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deletion_date TIMESTAMPTZ
+);
+
+CREATE INDEX idx_keys_chain_type ON keys(chain_type);
+CREATE INDEX idx_keys_status ON keys(status);
+CREATE INDEX idx_keys_created_at ON keys(created_at);
+
+CREATE TABLE nodes (
+    node_id VARCHAR(255) PRIMARY KEY,
+    node_type VARCHAR(50) NOT NULL,
+    endpoint VARCHAR(255) NOT NULL,
+    public_key TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    capabilities JSONB,
+    metadata JSONB,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_heartbeat TIMESTAMPTZ
+);
+
+CREATE INDEX idx_nodes_type ON nodes(node_type);
+CREATE INDEX idx_nodes_status ON nodes(status);
+
+CREATE TABLE signing_sessions (
+    session_id VARCHAR(255) PRIMARY KEY,
+    key_id VARCHAR(255) NOT NULL,
+    protocol VARCHAR(50) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    threshold INTEGER NOT NULL,
+    total_nodes INTEGER NOT NULL,
+    participating_nodes JSONB,
+    current_round INTEGER DEFAULT 0,
+    total_rounds INTEGER NOT NULL,
+    signature TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    duration_ms INTEGER,
+    FOREIGN KEY (key_id) REFERENCES keys(key_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_sessions_key_id ON signing_sessions(key_id);
+CREATE INDEX idx_sessions_status ON signing_sessions(status);
+CREATE INDEX idx_sessions_created_at ON signing_sessions(created_at);
+
+CREATE TABLE policies (
+    policy_id VARCHAR(255) PRIMARY KEY,
+    description TEXT,
+    policy_document JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type VARCHAR(50) NOT NULL,
+    user_id VARCHAR(255),
+    key_id VARCHAR(255),
+    node_id VARCHAR(255),
+    session_id VARCHAR(255),
+    operation VARCHAR(50) NOT NULL,
+    result VARCHAR(50) NOT NULL,
+    details JSONB,
+    ip_address VARCHAR(50)
+);
+
+CREATE INDEX idx_audit_timestamp ON audit_logs(timestamp);
+CREATE INDEX idx_audit_key_id ON audit_logs(key_id);
+CREATE INDEX idx_audit_user_id ON audit_logs(user_id);
+CREATE INDEX idx_audit_node_id ON audit_logs(node_id);
+CREATE INDEX idx_audit_session_id ON audit_logs(session_id);
+
+-- +migrate Down
+DROP INDEX IF EXISTS idx_audit_session_id;
+DROP INDEX IF EXISTS idx_audit_node_id;
+DROP INDEX IF EXISTS idx_audit_user_id;
+DROP INDEX IF EXISTS idx_audit_key_id;
+DROP INDEX IF EXISTS idx_audit_timestamp;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS signing_sessions;
+DROP TABLE IF EXISTS nodes;
+DROP TABLE IF EXISTS policies;
+DROP INDEX IF EXISTS idx_sessions_created_at;
+DROP INDEX IF EXISTS idx_sessions_status;
+DROP INDEX IF EXISTS idx_sessions_key_id;
+DROP INDEX IF EXISTS idx_nodes_status;
+DROP INDEX IF EXISTS idx_nodes_type;
+DROP INDEX IF EXISTS idx_keys_created_at;
+DROP INDEX IF EXISTS idx_keys_status;
+DROP INDEX IF EXISTS idx_keys_chain_type;
+DROP TABLE IF EXISTS keys;
+```
+
+### 数据库设计原则
+
+1. **表设计**：
+   - 使用 UUID 作为主键（`uuid_generate_v4()`）
+   - 添加 `created_at` 和 `updated_at` 时间戳
+   - 使用外键约束保证数据完整性
+   - 添加必要的唯一约束和索引
+
+2. **索引设计**：
+   - 为常用查询字段添加索引
+   - 为外键字段添加索引
+   - 为组合查询添加组合索引
+
+3. **数据类型**：
+   - 金额使用 `TEXT` 类型存储（避免精度丢失）
+   - 时间使用 `TIMESTAMPTZ` 类型
+   - 布尔值使用 `BOOLEAN` 类型
+   - 枚举使用 `VARCHAR` 或创建枚举类型
+
+## 服务接口设计
+
+### 服务接口规范
+
+所有服务必须定义接口（在服务包内）：
+
+```go
+// internal/mpc/key/service.go
+package key
+
+type Service interface {
+    CreateKey(ctx context.Context, req *CreateKeyRequest) (*KeyMetadata, error)
+    GetKey(ctx context.Context, keyID string) (*KeyMetadata, error)
+    DeleteKey(ctx context.Context, keyID string) error
+    RotateKey(ctx context.Context, keyID string) (*KeyMetadata, error)
+    ListKeys(ctx context.Context, filter *KeyFilter) ([]*KeyMetadata, error)
+}
+
+// internal/mpc/signing/service.go
+package signing
+
+type Service interface {
+    ThresholdSign(ctx context.Context, req *SignRequest) (*SignResponse, error)
+    BatchSign(ctx context.Context, req *BatchSignRequest) (*BatchSignResponse, error)
+    Verify(ctx context.Context, req *VerifyRequest) (*VerifyResponse, error)
+}
+
+// internal/mpc/coordinator/service.go
+package coordinator
+
+type Service interface {
+    CreateSigningSession(ctx context.Context, req *CreateSessionRequest) (*SigningSession, error)
+    JoinSigningSession(ctx context.Context, sessionID string, nodeID string) error
+    GetSigningSession(ctx context.Context, sessionID string) (*SigningSession, error)
+    AggregateSignatures(ctx context.Context, sessionID string) (*Signature, error)
+}
+
+// internal/mpc/participant/service.go
+package participant
+
+type Service interface {
+    ParticipateKeyGen(ctx context.Context, sessionID string) (*KeyShare, error)
+    ParticipateSign(ctx context.Context, sessionID string, msg []byte) (*SignatureShare, error)
+    StoreKeyShare(ctx context.Context, keyID string, share *KeyShare) error
+    GetKeyShare(ctx context.Context, keyID string) (*KeyShare, error)
+}
+
+// 实现
+type service struct {
+    db *sql.DB
+    redisClient *redis.Client
+    metadataStore storage.MetadataStore
+    keyShareStorage storage.KeyShareStorage
+    protocolEngine protocol.Engine
+    policyEngine policy.Engine
+    auditLogger audit.Logger
+}
+
+func NewService(db *sql.DB, redisClient *redis.Client, metadataStore storage.MetadataStore, keyShareStorage storage.KeyShareStorage, protocolEngine protocol.Engine, policyEngine policy.Engine, auditLogger audit.Logger) (Service, error) {
+    return &service{
+        db: db,
+        redisClient: redisClient,
+        metadataStore: metadataStore,
+        keyShareStorage: keyShareStorage,
+        protocolEngine: protocolEngine,
+        policyEngine: policyEngine,
+        auditLogger: auditLogger,
+    }, nil
+}
+```
+
+### 方法签名规范
+
+```go
+// ✅ 正确 - 第一个参数是 context.Context
+func (s *Service) CreateKey(ctx context.Context, req *CreateKeyRequest) (*KeyMetadata, error)
+
+// ✅ 正确 - 返回错误
+func (s *Service) Encrypt(ctx context.Context, req *EncryptRequest) (*EncryptResponse, error)
+
+// ❌ 错误 - 缺少 context
+func (s *Service) CreateKey(req *CreateKeyRequest) (*KeyMetadata, error)
+```
+
+## API Handler 规范
+
+### Handler 文件组织
+
+**每个接口单独一个文件**，参考以下模式：
+
+```
+internal/api/handlers/kms/
+├── keys/
+│   ├── handler.go                # Handler 结构体和 NewHandler 函数
+│   ├── post_create_key.go        # POST /v1/keys
+│   ├── get_key.go                # GET /v1/keys/{key_id}
+│   ├── put_update_key.go         # PUT /v1/keys/{key_id}
+│   ├── delete_key.go             # DELETE /v1/keys/{key_id}
+│   ├── post_enable_key.go        # POST /v1/keys/{key_id}/enable
+│   ├── post_disable_key.go       # POST /v1/keys/{key_id}/disable
+│   ├── post_rotate_key.go        # POST /v1/keys/{key_id}/rotate
+│   └── get_list_keys.go          # GET /v1/keys
+├── encryption/
+│   ├── post_encrypt.go           # POST /v1/encrypt
+│   ├── post_decrypt.go           # POST /v1/decrypt
+│   └── post_generate_data_key.go # POST /v1/generate-data-key
+└── sign/
+    ├── post_sign.go              # POST /v1/sign
+    └── post_verify.go             # POST /v1/verify
+```
+
+**命名规范**：
+- Handler 文件：`{method}_{resource}.go`（如 `post_create_wallet.go`）
+- Handler 函数：`{method}{Resource}Handler`（如 `postCreateWalletHandler`）
+- Route 函数：`{Method}{Resource}Route`（如 `PostCreateWalletRoute`）
+
+### Handler 结构
+
+遵循 go-starter 的 handler 模式：
+
+```go
+// internal/api/handlers/kms/keys/post_create_key.go
+package keys
+
+import (
+    "net/http"
+    "allaboutapps.dev/aw/go-starter/internal/api"
+    "allaboutapps.dev/aw/go-starter/internal/api/httperrors"
+    "allaboutapps.dev/aw/go-starter/internal/auth"
+    "allaboutapps.dev/aw/go-starter/internal/types"
+    "allaboutapps.dev/aw/go-starter/internal/util"
+    "github.com/labstack/echo/v4"
+)
+
+func PostCreateKeyRoute(s *api.Server) *echo.Route {
+    return s.Router.APIV1KMS.POST("/keys", postCreateKeyHandler(s))
+}
+
+func postCreateKeyHandler(s *api.Server) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        ctx := c.Request().Context()
+        user := auth.UserFromContext(ctx)
+        if user == nil {
+            return echo.ErrUnauthorized
+        }
+        log := util.LogFromContext(ctx)
+        
+        // 参数验证（Handler 层）
+        var body types.PostCreateKeyPayload
+        if err := util.BindAndValidateBody(c, &body); err != nil {
+            return err
+        }
+        
+        // 调用 Service 层
+        req := &key.CreateKeyRequest{
+            Alias: body.Alias,
+            Description: body.Description,
+            KeyType: body.KeyType,
+            KeySpec: body.KeySpec,
+            PolicyID: body.PolicyID,
+            Tags: body.Tags,
+        }
+        
+        keyMetadata, err := s.KeyService.CreateKey(ctx, req)
+        if err != nil {
+            log.Error().Err(err).Msg("Failed to create key")
+            return httperrors.NewHTTPError(http.StatusInternalServerError, types.PublicHTTPErrorTypeGeneric, "Failed to create key")
+        }
+        
+        // 返回响应
+        response := keyMetadata.ToTypes()
+        return util.ValidateAndReturn(c, http.StatusCreated, response)
+    }
+}
+```
+
+### 角色管理和权限控制
+
+**角色定义**：
+
+```go
+// internal/auth/roles.go
+package auth
+
+type UserRole string
+
+const (
+    RoleAdmin UserRole = "admin"
+    RoleUser  UserRole = "user"
+)
+```
+
+**权限检查模式**：
+
+```go
+// ✅ 正确 - 管理员权限检查
+func postCreateHotWalletHandler(s *api.Server) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        ctx := c.Request().Context()
+        user := auth.UserFromContext(ctx)
+        if user == nil {
+            return echo.ErrUnauthorized
+        }
+        log := util.LogFromContext(ctx)
+
+        // 检查用户是否为管理员
+        if user.Role != string(auth.RoleAdmin) {
+            log.Warn().
+                Str("user_id", user.ID).
+                Str("user_role", user.Role).
+                Msg("Non-admin user attempted to create hot wallet")
+            return httperrors.NewHTTPError(
+                http.StatusForbidden,
+                types.PublicHTTPErrorTypeGeneric,
+                "Only admin users can create hot wallets",
+            )
+        }
+        
+        // ... 业务逻辑
+    }
+}
+```
+
+**权限控制清单**：
+- ✅ 密钥创建：需要 `keys:create` 权限
+- ✅ 密钥删除：需要 `keys:delete` 权限（通常仅 `admin`）
+- ✅ 加密操作：需要 `keys:use` 权限
+- ✅ 策略管理：需要 `policies:manage` 权限（通常仅 `admin`）
+- ✅ 审计日志查询：需要 `audit:read` 权限（通常仅 `admin`）
+- ✅ 密钥轮换：需要 `keys:rotate` 权限
+
+### 错误处理规范
+
+**Handler 层错误处理**：
+
+```go
+func postCreateKeyHandler(s *api.Server) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        ctx := c.Request().Context()
+        log := util.LogFromContext(ctx)
+        
+        // 参数验证错误 - 返回 400
+        var body types.PostCreateKeyPayload
+        if err := util.BindAndValidateBody(c, &body); err != nil {
+            return err  // util.BindAndValidateBody 会自动返回 400
+        }
+        
+        // 业务逻辑错误 - 返回具体错误码
+        req := &key.CreateKeyRequest{
+            Alias: body.Alias,
+            KeyType: body.KeyType,
+            KeySpec: body.KeySpec,
+        }
+        
+        keyMetadata, err := s.KeyService.CreateKey(ctx, req)
+        if err != nil {
+            // 根据错误类型返回不同状态码
+            if errors.Is(err, key.ErrKeyNotFound) {
+                return httperrors.NewHTTPError(http.StatusNotFound, "Key not found")
+            }
+            if errors.Is(err, key.ErrInvalidKeyType) {
+                return httperrors.NewHTTPValidationError(
+                    http.StatusBadRequest,
+                    "Invalid key type",
+                    map[string]string{"key_type": "must be one of: AES_256, RSA_2048, ECC_P256"},
+                )
+            }
+            if errors.Is(err, key.ErrPolicyDenied) {
+                return httperrors.NewHTTPError(http.StatusForbidden, "Policy denied")
+            }
+            
+            log.Error().Err(err).Msg("Failed to create key")
+            return httperrors.NewHTTPError(http.StatusInternalServerError, "Internal server error")
+        }
+        
+        return util.ValidateAndReturn(c, http.StatusCreated, keyMetadata.ToTypes())
+    }
+}
+```
+
+### 路由注册
+
+在 `internal/api/handlers/handlers.go` 中注册路由：
+
+```go
+func AttachAllRoutes(s *api.Server) {
+    s.Router.Routes = []*echo.Route{
+        // ... 现有路由
+        keys.PostCreateKeyRoute(s),
+        keys.GetKeyRoute(s),
+        keys.PutUpdateKeyRoute(s),
+        keys.DeleteKeyRoute(s),
+        keys.PostEnableKeyRoute(s),
+        keys.PostDisableKeyRoute(s),
+        keys.PostRotateKeyRoute(s),
+        keys.GetListKeysRoute(s),
+        encryption.PostEncryptRoute(s),
+        encryption.PostDecryptRoute(s),
+        encryption.PostGenerateDataKeyRoute(s),
+        sign.PostSignRoute(s),
+        sign.PostVerifyRoute(s),
+        // ...
+    }
+}
+```
+
+## MPC 模块特定规范
+
+### 协议引擎
+
+```go
+// ✅ 正确 - 协议引擎接口
+type Engine interface {
+    // 分布式密钥生成（DKG）
+    GenerateKeyShare(ctx context.Context, req *KeyGenRequest) (map[string]*KeyShare, *PublicKey, error)
+    
+    // 阈值签名
+    ThresholdSign(ctx context.Context, sessionID string, nodes []string, msg []byte) (*Signature, error)
+    
+    // 签名验证
+    VerifySignature(ctx context.Context, sig *Signature, msg []byte, pubKey *PublicKey) (bool, error)
+    
+    // 密钥轮换
+    RotateKey(ctx context.Context, keyID string) error
+    
+    // 支持的协议
+    SupportedProtocols() []string
+    DefaultProtocol() string
+}
+
+// ✅ 正确 - GG18/GG20 协议实现
+type GG18Protocol struct {
+    // ...
+}
+
+func (p *GG18Protocol) ThresholdSign(ctx context.Context, sessionID string, nodes []string, msg []byte) (*Signature, error) {
+    // Round 1: 生成随机数，交换承诺
+    // Round 2: 交换随机数，验证承诺
+    // Round 3: 计算签名分片
+    // Round 4: 聚合签名分片
+    // ...
+}
+
+// ✅ 正确 - FROST 协议实现
+type FROSTProtocol struct {
+    // ...
+}
+
+func (p *FROSTProtocol) ThresholdSign(ctx context.Context, sessionID string, nodes []string, msg []byte) (*Signature, error) {
+    // Round 1: 生成随机数，交换承诺
+    // Round 2: 聚合签名
+    // ...
+}
+```
+
+### 密钥分片生命周期管理
+
+```go
+// ✅ 正确 - 密钥分片状态管理
+type KeyState string
+
+const (
+    KeyStateActive         KeyState = "Active"
+    KeyStateInactive       KeyState = "Inactive"
+    KeyStatePendingDeletion KeyState = "PendingDeletion"
+    KeyStateDeleted        KeyState = "Deleted"
+)
+
+// ✅ 正确 - 分布式密钥生成（DKG）
+func (s *Service) CreateKey(ctx context.Context, req *CreateKeyRequest) (*KeyMetadata, error) {
+    // 执行分布式密钥生成协议
+    keyShares, publicKey, err := s.protocolEngine.GenerateKeyShare(ctx, req)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to generate key shares")
+    }
+    
+    // 加密并分发密钥分片到各个节点
+    for nodeID, share := range keyShares {
+        // 加密分片
+        encryptedShare, err := s.encryptKeyShare(ctx, share)
+        if err != nil {
+            return nil, errors.Wrap(err, "failed to encrypt key share")
+        }
+        
+        // 安全传输到目标节点（TLS）
+        if err := s.distributeKeyShare(ctx, nodeID, encryptedShare); err != nil {
+            return nil, errors.Wrap(err, "failed to distribute key share")
+        }
+    }
+    
+    // 保存密钥元数据
+    keyMetadata := &KeyMetadata{
+        KeyID: generateKeyID(),
+        PublicKey: publicKey,
+        Algorithm: req.Algorithm,
+        Curve: req.Curve,
+        Threshold: req.Threshold,
+        TotalNodes: req.TotalNodes,
+        ChainType: req.ChainType,
+        Status: KeyStateActive,
+    }
+    
+    if err := s.metadataStore.SaveKeyMetadata(ctx, keyMetadata); err != nil {
+        return nil, errors.Wrap(err, "failed to save key metadata")
+    }
+    
+    // 记录审计日志
+    s.auditLogger.LogEvent(ctx, &AuditEvent{
+        EventType: "KeyCreated",
+        KeyID: keyMetadata.KeyID,
+        Operation: "create_key",
+        Result: "Success",
+    })
+    
+    return keyMetadata, nil
+}
+
+// ✅ 正确 - 密钥轮换（无需重新分发分片）
+func (s *Service) RotateKey(ctx context.Context, keyID string) (*KeyMetadata, error) {
+    // 获取当前密钥元数据
+    keyMetadata, err := s.metadataStore.GetKeyMetadata(ctx, keyID)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to get key metadata")
+    }
+    
+    // 执行密钥轮换协议
+    newKeyShares, newPublicKey, err := s.protocolEngine.RotateKey(ctx, keyID)
+    if err != nil {
+        return nil, errors.Wrap(err, "failed to rotate key")
+    }
+    
+    // 更新密钥元数据
+    keyMetadata.PublicKey = newPublicKey
+    keyMetadata.UpdatedAt = time.Now()
+    
+    if err := s.metadataStore.UpdateKeyMetadata(ctx, keyMetadata); err != nil {
+        return nil, errors.Wrap(err, "failed to update key metadata")
+    }
+    
+    // 记录审计日志
+    s.auditLogger.LogEvent(ctx, &AuditEvent{
+        EventType: "KeyRotated",
+        KeyID: keyID,
+        Operation: "rotate_key",
+        Result: "Success",
+    })
+    
+    return keyMetadata, nil
+}
+```
+
+### 加密上下文验证
+
+```go
+// ✅ 正确 - 加密上下文验证
+func (s *Service) validateEncryptionContext(ctx context.Context, encryptionContext map[string]string) error {
+    // 验证加密上下文格式
+    if len(encryptionContext) > 10 {
+        return errors.New("encryption context too large")
+    }
+    
+    // 验证键值对格式
+    for key, value := range encryptionContext {
+        if len(key) > 128 || len(value) > 1024 {
+            return errors.New("encryption context key or value too long")
+        }
+    }
+    
+    return nil
+}
+```
+
+### 策略引擎
+
+```go
+// ✅ 正确 - 策略评估
+func (e *Engine) EvaluatePolicy(ctx context.Context, policyID string, action string) error {
+    // 加载策略
+    policy, err := e.metadataStore.GetPolicy(ctx, policyID)
+    if err != nil {
+        return errors.Wrap(err, "failed to get policy")
+    }
+    
+    // 评估策略
+    allowed := false
+    for _, statement := range policy.Statements {
+        if statement.Effect == "Allow" {
+            for _, allowedAction := range statement.Actions {
+                if allowedAction == action || allowedAction == "*" {
+                    allowed = true
+                    break
+                }
+            }
+        } else if statement.Effect == "Deny" {
+            for _, deniedAction := range statement.Actions {
+                if deniedAction == action || deniedAction == "*" {
+                    return ErrPolicyDenied
+                }
+            }
+        }
+    }
+    
+    if !allowed {
+        return ErrPolicyDenied
+    }
+    
+    return nil
+}
+```
+
+## 测试规范
+
+### 单元测试
+
+```go
+// internal/wallet/service_test.go
+package wallet
+
+import (
+    "context"
+    "testing"
+    "allaboutapps.dev/aw/go-starter/internal/test"
+)
+
+func TestCreateWallet(t *testing.T) {
+    test.WithTestDatabase(t, func(db *sql.DB) {
+        ctx := context.Background()
+        service := NewService(db, ...)
+        
+        wallet, err := service.CreateWallet(ctx, "user-123", "evm")
+        assert.NoError(t, err)
+        assert.NotNil(t, wallet)
+        assert.Equal(t, "evm", wallet.ChainType)
+    })
+}
+```
+
+### 集成测试
+
+- 使用 `internal/test` 包的测试工具
+- 使用 IntegreSQL 进行数据库隔离测试
+- 测试完整的业务流程
+
+## 类型定义规范
+
+### API 类型（Swagger 生成）
+
+**重要**：所有 API 类型通过 Swagger 生成，不要手动创建。
+
+1. **在 `api/definitions/` 中定义类型**：
+```yaml
+# api/definitions/kms.yml
+definitions:
+  PostCreateKeyPayload:
+    type: object
+    required: [key_type]
+    properties:
+      alias:
+        type: string
+        example: "my-encryption-key"
+      description:
+        type: string
+        example: "用于生产环境数据加密"
+      key_type:
+        type: string
+        enum: [AES_256, RSA_2048, RSA_4096, ECC_P256, ECC_P384, ECC_P521, Ed25519]
+        example: AES_256
+      key_spec:
+        type: object
+        properties:
+          algorithm:
+            type: string
+          key_size:
+            type: integer
+      tags:
+        type: object
+        additionalProperties:
+          type: string
+  
+  CreateKeyResponse:
+    type: object
+    required: [key_id, key_type, key_state]
+    properties:
+      key_id:
+        type: string
+        example: "key-1234567890abcdef"
+      alias:
+        type: string
+        example: "my-encryption-key"
+      key_type:
+        type: string
+        example: "AES_256"
+      key_state:
+        type: string
+        enum: [Enabled, Disabled, PendingDeletion, Deleted]
+        example: "Enabled"
+      created_at:
+        type: string
+        format: date-time
+      arn:
+        type: string
+        example: "arn:kms:us-east-1:123456789012:key/key-1234567890abcdef"
+```
+
+2. **在 `api/config/main.yml` 中添加引用**：
+```yaml
+definitions:
+  postCreateWalletPayload:
+    $ref: "../definitions/wallet.yml#/definitions/PostCreateWalletPayload"
+  createWalletResponse:
+    $ref: "../definitions/wallet.yml#/definitions/CreateWalletResponse"
+```
+
+3. **运行 `make swagger` 生成 Go 类型**：
+```bash
+make swagger  # 生成 internal/types/wallet/*.go
+```
+
+4. **在 Handler 中使用生成的类型**：
+```go
+// ✅ 正确 - 使用生成的类型
+var body types.PostCreateWalletPayload
+if err := util.BindAndValidateBody(c, &body); err != nil {
+    return err
+}
+
+// ❌ 错误 - 不要手动定义 API 类型
+type PostCreateWalletPayload struct {
+    ChainType string `json:"chain_type"`
+}
+```
+
+### 服务类型
+
+服务内部类型定义在服务包的 `types.go`：
+
+```go
+// internal/kms/key/types.go
+package key
+
+// KeyMetadata 服务内部类型
+type KeyMetadata struct {
+    KeyID         string
+    Alias         string
+    Description   string
+    KeyType       string
+    KeyState      KeyState
+    KeySpec       *KeySpec
+    HSMHandle     string
+    PolicyID      string
+    CreatedAt     time.Time
+    UpdatedAt     time.Time
+    DeletionDate  *time.Time
+    Tags          map[string]string
+}
+
+// ToTypes 转换为 API 类型
+func (k *KeyMetadata) ToTypes() *types.CreateKeyResponse {
+    return &types.CreateKeyResponse{
+        KeyID:      k.KeyID,
+        Alias:      k.Alias,
+        KeyType:    k.KeyType,
+        KeyState:   string(k.KeyState),
+        CreatedAt:  k.CreatedAt,
+        ARN:        generateARN(k.KeyID),
+    }
+}
+```
+
+## 配置规范
+
+### 全局配置管理
+
+所有 MPC 相关配置通过环境变量，使用 `internal/config` 包：
+
+```go
+// internal/config/server_config.go
+type MPC struct {
+    NodeType            string  // 节点类型（coordinator, participant）
+    NodeID              string  // 节点ID
+    CoordinatorEndpoint string  // Coordinator 端点（Participant 节点需要）
+    
+    // 存储配置
+    StorageBackend      string  // 存储后端类型（postgresql）
+    RedisEndpoint       string  // Redis 端点（会话缓存）
+    KeyShareStoragePath string  // 密钥分片存储路径
+    KeyShareEncryptionKey string // 密钥分片加密密钥
+    
+    // 协议配置
+    SupportedProtocols  []string // 支持的协议（gg18, gg20, frost）
+    DefaultProtocol     string   // 默认协议（gg20）
+    
+    // 服务配置
+    HTTPPort            int     // HTTP 端口（默认 8080）
+    GRPCPort            int     // gRPC 端口（默认 9090）
+    TLSEnabled          bool    // 是否启用 TLS（默认 true）
+    
+    // 功能配置
+    EnableAudit         bool    // 是否启用审计日志（默认 true）
+    EnablePolicy        bool    // 是否启用策略引擎（默认 true）
+    KeyRotationDays     int     // 密钥自动轮换周期（天，0 表示禁用）
+    
+    // 性能配置
+    MaxConcurrentSessions int   // 最大并发会话数（默认 100）
+    MaxConcurrentSignings  int   // 最大并发签名数（默认 50）
+    SessionTimeout         int   // 会话超时时间（秒，默认 300）
+}
+```
+
+**环境变量**：
+- `MPC_NODE_TYPE`: 节点类型（`coordinator` 或 `participant`）
+- `MPC_NODE_ID`: 节点ID
+- `MPC_COORDINATOR_ENDPOINT`: Coordinator 端点（Participant 节点需要）
+- `MPC_STORAGE_BACKEND`: 存储后端类型（默认 `postgresql`）
+- `MPC_REDIS_ENDPOINT`: Redis 端点（默认 `localhost:6379`）
+- `MPC_KEY_SHARE_STORAGE_PATH`: 密钥分片存储路径（默认 `/var/lib/mpc/key-shares`）
+- `MPC_KEY_SHARE_ENCRYPTION_KEY`: 密钥分片加密密钥（必须设置）
+- `MPC_SUPPORTED_PROTOCOLS`: 支持的协议（默认 `gg18,gg20,frost`）
+- `MPC_DEFAULT_PROTOCOL`: 默认协议（默认 `gg20`）
+- `MPC_HTTP_PORT`: HTTP 端口（默认 `8080`）
+- `MPC_GRPC_PORT`: gRPC 端口（默认 `9090`）
+- `MPC_TLS_ENABLED`: 是否启用 TLS（默认 `true`）
+- `MPC_ENABLE_AUDIT`: 是否启用审计日志（默认 `true`）
+- `MPC_ENABLE_POLICY`: 是否启用策略引擎（默认 `true`）
+- `MPC_KEY_ROTATION_DAYS`: 密钥自动轮换周期（默认 `0`，表示禁用）
+
+**安全设计**：
+- 默认启用审计日志和策略引擎
+- 生产环境必须启用 TLS
+- 密钥分片必须加密存储
+- 密钥轮换默认禁用，需要显式配置
+
+**配置使用**：
+
+```go
+// cmd/server/mpc_init.go
+// 初始化存储后端
+var metadataStore storage.MetadataStore
+switch s.Config.MPC.StorageBackend {
+case "postgresql":
+    metadataStore = storage.NewPostgreSQLStore(s.DB)
+}
+
+// 初始化 Redis（会话缓存）
+redisClient := redis.NewClient(&redis.Options{
+    Addr: s.Config.MPC.RedisEndpoint,
+})
+
+// 初始化密钥分片存储
+keyShareStorage := storage.NewKeyShareStorage(
+    s.Config.MPC.KeyShareStoragePath,
+    s.Config.MPC.KeyShareEncryptionKey,
+)
+
+// 初始化协议引擎
+protocolEngine := protocol.NewEngine(
+    s.Config.MPC.SupportedProtocols,
+    s.Config.MPC.DefaultProtocol,
+)
+
+// 初始化 Coordinator 或 Participant 服务
+if s.Config.MPC.NodeType == "coordinator" {
+    coordinatorService := coordinator.NewService(
+        s.DB,
+        redisClient,
+        metadataStore,
+        protocolEngine,
+        policyEngine,
+        auditLogger,
+    )
+    s.CoordinatorService = coordinatorService
+} else {
+    participantService := participant.NewService(
+        s.Config.MPC.NodeID,
+        s.Config.MPC.CoordinatorEndpoint,
+        keyShareStorage,
+        protocolEngine,
+        auditLogger,
+    )
+    s.ParticipantService = participantService
+}
+
+// 启动密钥自动轮换（如果启用）
+if s.Config.MPC.KeyRotationDays > 0 {
+    go keyService.StartAutoRotation(ctx, time.Duration(s.Config.MPC.KeyRotationDays)*24*time.Hour)
+}
+```
+
+## 代码审查检查清单
+
+在提交代码前检查：
+
+- [ ] 遵循 Wire 依赖注入规范
+- [ ] 所有服务方法第一个参数是 `context.Context`
+- [ ] 错误处理完整，使用 `errors.Wrap` 添加上下文
+- [ ] 使用结构化日志（zerolog），不记录敏感信息
+- [ ] 密钥分片使用后立即从内存清除
+- [ ] 数据库查询使用参数化查询
+- [ ] 使用 SQLBoiler 模型，不直接写 SQL
+- [ ] 所有导出函数和类型有注释
+- [ ] 通过 `golangci-lint` 检查
+- [ ] 单元测试覆盖核心逻辑
+- [ ] API Handler 遵循 go-starter 模式
+- [ ] 策略权限检查（使用策略引擎评估权限）
+- [ ] 全局配置检查（NodeType, StorageBackend, SupportedProtocols, EnableAudit, EnablePolicy）
+- [ ] 密钥分片加密存储，永不完整存在
+- [ ] 所有密钥操作记录审计日志（不记录敏感内容）
+- [ ] 阈值签名协议正确实现（GG18/GG20/FROST）
+- [ ] 节点间通信使用 TLS 加密
+- [ ] 密钥分片状态流转正确（Active → Inactive → PendingDeletion → Deleted）
+- [ ] 签名会话管理正确（创建、加入、聚合、超时处理）
+- [ ] 节点故障容错机制正确（阈值容错）
+
+## 构建和开发流程
+
+### Make 命令
+
+```bash
+# 完整构建流程
+make build          # 默认构建：sql + swagger + go-build + go-lint
+make all            # 完整构建 + 测试
+
+# API 开发
+make swagger        # 生成 API 代码（从 api/ 目录生成 internal/types/）
+make watch-swagger  # 监听 API 文件变化
+
+# 数据库开发
+make sql            # 生成数据库代码（从 migrations/ 生成 internal/models/）
+make sql-reset      # 重置开发数据库
+make watch-sql      # 监听 SQL 文件变化
+
+# 测试
+make test           # 运行测试
+make watch-tests    # 监听文件变化运行测试
+```
+
+### 开发流程
+
+1. **API 开发流程**：
+   - 在 `api/paths/` 和 `api/definitions/` 中定义接口
+   - 运行 `make swagger` 生成类型
+   - 实现 Handler 逻辑
+
+2. **数据库开发流程**：
+   - 在 `migrations/` 中编写迁移文件
+   - 运行 `make sql` 生成模型
+   - 在 Service 中使用生成的模型
+
+## 常见错误避免
+
+### ❌ 不要这样做
+
+```go
+// ❌ 错误 - 密钥保存到变量
+keyMaterial := getKeyFromHSM(handle)
+s.keyMaterial = keyMaterial  // 不要保存！
+
+// ❌ 错误 - 日志记录密钥句柄或密钥材料
+log.Info().Str("hsm_handle", handle).Msg("...")  // 不要记录句柄
+log.Info().Str("key_material", hex.EncodeToString(keyMaterial)).Msg("...")  // 不要记录密钥材料
+
+// ❌ 错误 - SQL 注入
+query := fmt.Sprintf("SELECT * FROM wallets WHERE user_id = '%s'", userID)
+
+// ❌ 错误 - 忽略错误
+result, _ := someFunction()
+
+// ❌ 错误 - 缺少 context
+func CreateWallet(userID string) (*Wallet, error)
+
+// ❌ 错误 - 不使用 Wire
+func (s *Server) InitWallet() error
+
+// ❌ 错误 - 先写 Handler 再补 API 定义
+// 应该先定义 API，再生成代码，最后实现 Handler
+
+// ❌ 错误 - 使用 map[string]interface{} 而不是生成的类型
+return c.JSON(http.StatusOK, map[string]interface{}{
+    "id": wallet.ID,
+    "address": wallet.Address,
+})
+
+// ❌ 错误 - Service 层重复验证参数
+func (s *Service) CreateWallet(ctx context.Context, req *Request) (*Wallet, error) {
+    if req.UserID == "" {  // ❌ 参数验证应该在 Handler 层
+        return nil, errors.New("user_id is required")
+    }
+}
+
+// ❌ 错误 - 直接使用 c.JSON 返回响应
+return c.JSON(http.StatusOK, response)  // 应该使用 util.ValidateAndReturn
+
+// ❌ 错误 - 使用字符串字面量而不是常量
+if user.Role != "admin" {  // ❌ 应该使用 auth.RoleAdmin
+    return err
+}
+
+// ❌ 错误 - 归集操作创建 credits 记录
+// 归集不应该影响用户余额，只创建 transactions 记录
+
+// ❌ 错误 - 无条件启动自动服务
+rebalanceService.StartAutoRebalance(ctx, interval)  // ❌ 应该检查配置
+```
+
+### ✅ 应该这样做
+
+```go
+// ✅ 正确 - 使用密钥句柄，密钥不离开 HSM
+func (s *Service) Encrypt(ctx context.Context, req *EncryptRequest) (*EncryptResponse, error) {
+    // 获取密钥元数据（包含 HSM 句柄）
+    keyMetadata, err := s.metadataStore.GetKeyMetadata(ctx, req.KeyID)
+    if err != nil {
+        return nil, err
+    }
+    
+    // 在 HSM 内执行加密，密钥不离开 HSM
+    ciphertext, err := s.hsmAdapter.Encrypt(ctx, keyMetadata.HSMHandle, req.Plaintext)
+    if err != nil {
+        return nil, err
+    }
+    
+    return &EncryptResponse{CiphertextBlob: ciphertext}, nil
+}
+
+// ✅ 正确 - 只记录地址
+log.Info().Str("address", address).Msg("Wallet created")
+
+// ✅ 正确 - 参数化查询
+rows, err := db.QueryContext(ctx, "SELECT * FROM wallets WHERE user_id = $1", userID)
+
+// ✅ 正确 - 检查错误
+result, err := someFunction()
+if err != nil {
+    return errors.Wrap(err, "failed to ...")
+}
+
+// ✅ 正确 - 包含 context
+func CreateWallet(ctx context.Context, userID string) (*Wallet, error)
+
+// ✅ 正确 - 使用 Wire Provider
+func NewWalletService(db *sql.DB) (*Service, error) {
+    return &Service{db: db}, nil
+}
+
+// ✅ 正确 - API 优先：先定义，再生成，最后实现
+// 1. 在 api/definitions/ 中定义类型
+// 2. 运行 make swagger 生成代码
+// 3. 实现 Handler
+
+// ✅ 正确 - 使用生成的类型
+response := &types.CreateWalletResponse{
+    ID: wallet.ID,
+    Address: wallet.Address,
+}
+return util.ValidateAndReturn(c, http.StatusOK, response)
+
+// ✅ 正确 - Handler 层验证参数，Service 层只处理业务逻辑
+func postCreateWalletHandler(s *api.Server) echo.HandlerFunc {
+    var body types.PostCreateWalletPayload
+    if err := util.BindAndValidateBody(c, &body); err != nil {
+        return err  // 参数验证在 Handler 层
+    }
+    // Service 层不再验证参数
+    wallet, err := s.Wallet.CreateWallet(ctx, body.UserID, body.ChainType)
+}
+
+// ✅ 正确 - 使用角色常量
+if user.Role != string(auth.RoleAdmin) {
+    return httperrors.NewHTTPError(http.StatusForbidden, ...)
+}
+
+// ✅ 正确 - 根据配置启动服务
+if s.Config.Wallet.EnableAutoRebalance {
+    rebalanceService.StartAutoRebalance(ctx, interval)
+}
+
+// ✅ 正确 - 归集只创建 transactions 记录
+func (s *service) insertCollectTransaction(ctx context.Context, ...) error {
+    tx := &models.Transaction{
+        Type: models.TransactionTypeCollect,
+        // ... 不创建 credits 记录
+    }
+    return tx.Insert(ctx, s.db, boil.Infer())
+}
+```
+
+## 业务逻辑规范
+
+### 密钥分片生命周期管理
+
+**状态管理**：
+- **Active**: 密钥分片可用，可以用于阈值签名
+- **Inactive**: 密钥分片禁用，保留用于验证历史签名
+- **PendingDeletion**: 计划删除，等待期（默认 30 天）内可以取消删除
+- **Deleted**: 已删除，元数据保留用于审计，分片已从所有节点删除
+
+**状态流转**：
+- Active → Inactive（管理员禁用）
+- Inactive → Active（管理员启用）
+- Active/Inactive → PendingDeletion（计划删除）
+- PendingDeletion → Deleted（等待期后永久删除）
+
+### 分布式密钥生成（DKG）流程
+
+**DKG 原则**：
+- 所有参与节点协作生成密钥分片
+- 密钥永不完整存在
+- 支持真随机数生成
+- 支持恶意节点检测和排除
+
+**DKG 流程**：
+1. Coordinator 创建密钥生成会话
+2. 所有 Participant 节点参与
+3. 每个节点生成随机分片
+4. 节点间交换和验证分片
+5. 生成最终密钥分片
+6. 计算公钥
+7. 加密并分发分片到各个节点
+8. 记录审计日志
+
+### 阈值签名流程
+
+**签名流程**：
+1. 客户端发起签名请求
+2. Coordinator 创建签名会话
+3. Coordinator 选择参与节点（达到阈值即可）
+4. 节点加入签名会话
+5. 节点执行签名协议（GG18/GG20/FROST）
+   - Round 1: 生成随机数，交换承诺
+   - Round 2: 交换随机数，验证承诺
+   - Round 3: 计算签名分片
+   - Round 4: 聚合签名分片
+6. Coordinator 聚合签名分片
+7. 生成最终签名
+8. 验证签名
+9. 返回签名给客户端
+10. 记录审计日志
+
+**容错机制**：
+- 支持节点故障（只要达到阈值即可）
+- 自动重试机制
+- 签名超时处理
+- 节点替换机制
+
+### 密钥轮换流程
+
+**轮换原则**：
+- 无需重新分发分片（使用密钥轮换协议）
+- 分布式密钥轮换
+- 向后兼容（旧密钥可用于验证历史签名）
+- 新密钥用于新签名
+
+**轮换流程**：
+1. Coordinator 发起密钥轮换请求
+2. 参与节点执行密钥轮换协议
+3. 生成新的密钥分片
+4. 更新密钥元数据
+5. 旧密钥保留用于验证历史签名
+6. 记录审计日志
+
+### 策略引擎
+
+**策略模型**：
+- 基于策略的访问控制（Policy-Based Access Control）
+- 支持 Allow 和 Deny 两种效果
+- 支持细粒度权限控制（create, read, update, delete, use）
+- 支持加密上下文条件验证
+
+**策略评估**：
+- 拒绝策略优先于允许策略
+- 支持策略继承和组合
+- 实时策略评估，不缓存策略结果
+
+### 审计日志
+
+**日志内容**：
+- 所有密钥操作（创建、使用、删除等）
+- 所有访问尝试（成功和失败）
+- 操作上下文（IP、用户、时间等）
+- 不记录敏感信息（密钥材料、明文等）
+
+**日志存储**：
+- 独立存储，不可篡改
+- 加密存储
+- 长期保存（符合合规要求）
+- 支持日志导出和分析
+
+## 参考资料
+
+- [go-starter 文档](https://github.com/allaboutapps/go-starter)
+- [Wire 依赖注入](https://github.com/google/wire)
+- [SQLBoiler 文档](https://github.com/volatiletech/sqlboiler)
+- [Echo 框架文档](https://echo.labstack.com/)
+- [MPC 产品文档](../MPC产品文档/)
+- [tss-lib](https://github.com/binance-chain/tss-lib) - Binance 开源的 TSS 库
+- [ZenGo-X/multi-party-ecdsa](https://github.com/ZenGo-X/multi-party-ecdsa) - ZenGo 开源的 MPC 实现
+- [FROST](https://github.com/ZcashFoundation/frost) - IETF 标准实现
+- [GG18 论文](https://eprint.iacr.org/2019/114) - Fast Multiparty Threshold ECDSA with Fast Trustless Setup
+- [GG20 论文](https://eprint.iacr.org/2020/540) - One Round Threshold ECDSA with Identifiable Abort
+- [FROST 论文](https://eprint.iacr.org/2020/852) - Two-Round Threshold Schnorr Signatures with Fiat-Shamir via Homomorphic Commitments
+- [BIP-340: Schnorr Signatures](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)
+- [EIP-191: Signed Data Standard](https://eips.ethereum.org/EIPS/eip-191)
+- [EIP-712: Typed Structured Data Hashing](https://eips.ethereum.org/EIPS/eip-712)
+
+---
+
+**重要提醒**：
+- 始终遵循 go-starter 的架构模式
+- 安全第一：密钥分片加密存储，永不完整存在，分布式存储
+- 使用 Wire 进行依赖注入，不要手动初始化
+- 所有数据库操作使用 SQLBoiler 模型
+- 遵循项目的错误处理和日志规范
+- 所有密钥操作记录审计日志（不记录敏感内容）
+- 使用策略引擎进行权限控制，不要硬编码权限检查
+- 密钥分片操作使用加密存储，不要直接操作明文分片
+- 节点间通信使用 TLS 加密
+- 阈值签名协议正确实现（GG18/GG20/FROST）
+- 支持阈值容错，只要达到阈值即可签名
+- 签名会话管理正确（创建、加入、聚合、超时处理）
+

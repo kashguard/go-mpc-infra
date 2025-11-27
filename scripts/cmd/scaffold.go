@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"allaboutapps.dev/aw/go-starter/scripts/internal/scaffold"
+	"github.com/kashguard/go-mpc-wallet/scripts/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 

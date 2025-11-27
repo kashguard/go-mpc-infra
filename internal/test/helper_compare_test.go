@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"allaboutapps.dev/aw/go-starter/internal/test"
-	"allaboutapps.dev/aw/go-starter/internal/util"
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/strfmt/conv"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
+	"github.com/kashguard/go-mpc-wallet/internal/util"
 	"github.com/stretchr/testify/require"
 )
 

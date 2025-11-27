@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
 )
 
 const (

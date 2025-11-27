@@ -14,6 +14,7 @@ func TestToOne(t *testing.T) {
 	t.Run("PasswordResetTokenToUserUsingUser", testPasswordResetTokenToOneUserUsingUser)
 	t.Run("PushTokenToUserUsingUser", testPushTokenToOneUserUsingUser)
 	t.Run("RefreshTokenToUserUsingUser", testRefreshTokenToOneUserUsingUser)
+	t.Run("SigningSessionToKeyUsingKey", testSigningSessionToOneKeyUsingKey)
 }
 
 // TestOneToOne tests cannot be run in parallel
@@ -25,6 +26,7 @@ func TestOneToOne(t *testing.T) {
 // TestToMany tests cannot be run in parallel
 // or deadlocks can occur.
 func TestToMany(t *testing.T) {
+	t.Run("KeyToSigningSessions", testKeyToManySigningSessions)
 	t.Run("UserToAccessTokens", testUserToManyAccessTokens)
 	t.Run("UserToConfirmationTokens", testUserToManyConfirmationTokens)
 	t.Run("UserToPasswordResetTokens", testUserToManyPasswordResetTokens)
@@ -41,6 +43,7 @@ func TestToOneSet(t *testing.T) {
 	t.Run("PasswordResetTokenToUserUsingPasswordResetTokens", testPasswordResetTokenToOneSetOpUserUsingUser)
 	t.Run("PushTokenToUserUsingPushTokens", testPushTokenToOneSetOpUserUsingUser)
 	t.Run("RefreshTokenToUserUsingRefreshTokens", testRefreshTokenToOneSetOpUserUsingUser)
+	t.Run("SigningSessionToKeyUsingSigningSessions", testSigningSessionToOneSetOpKeyUsingKey)
 }
 
 // TestToOneRemove tests cannot be run in parallel
@@ -60,6 +63,7 @@ func TestOneToOneRemove(t *testing.T) {}
 // TestToManyAdd tests cannot be run in parallel
 // or deadlocks can occur.
 func TestToManyAdd(t *testing.T) {
+	t.Run("KeyToSigningSessions", testKeyToManyAddOpSigningSessions)
 	t.Run("UserToAccessTokens", testUserToManyAddOpAccessTokens)
 	t.Run("UserToConfirmationTokens", testUserToManyAddOpConfirmationTokens)
 	t.Run("UserToPasswordResetTokens", testUserToManyAddOpPasswordResetTokens)

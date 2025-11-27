@@ -14,100 +14,140 @@ import "testing"
 func TestParent(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokens)
 	t.Run("AppUserProfiles", testAppUserProfiles)
+	t.Run("AuditLogs", testAuditLogs)
 	t.Run("ConfirmationTokens", testConfirmationTokens)
+	t.Run("Keys", testKeys)
+	t.Run("Nodes", testNodes)
 	t.Run("PasswordResetTokens", testPasswordResetTokens)
 	t.Run("PushTokens", testPushTokens)
 	t.Run("RefreshTokens", testRefreshTokens)
+	t.Run("SigningSessions", testSigningSessions)
 	t.Run("Users", testUsers)
 }
 
 func TestDelete(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensDelete)
 	t.Run("AppUserProfiles", testAppUserProfilesDelete)
+	t.Run("AuditLogs", testAuditLogsDelete)
 	t.Run("ConfirmationTokens", testConfirmationTokensDelete)
+	t.Run("Keys", testKeysDelete)
+	t.Run("Nodes", testNodesDelete)
 	t.Run("PasswordResetTokens", testPasswordResetTokensDelete)
 	t.Run("PushTokens", testPushTokensDelete)
 	t.Run("RefreshTokens", testRefreshTokensDelete)
+	t.Run("SigningSessions", testSigningSessionsDelete)
 	t.Run("Users", testUsersDelete)
 }
 
 func TestQueryDeleteAll(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensQueryDeleteAll)
 	t.Run("AppUserProfiles", testAppUserProfilesQueryDeleteAll)
+	t.Run("AuditLogs", testAuditLogsQueryDeleteAll)
 	t.Run("ConfirmationTokens", testConfirmationTokensQueryDeleteAll)
+	t.Run("Keys", testKeysQueryDeleteAll)
+	t.Run("Nodes", testNodesQueryDeleteAll)
 	t.Run("PasswordResetTokens", testPasswordResetTokensQueryDeleteAll)
 	t.Run("PushTokens", testPushTokensQueryDeleteAll)
 	t.Run("RefreshTokens", testRefreshTokensQueryDeleteAll)
+	t.Run("SigningSessions", testSigningSessionsQueryDeleteAll)
 	t.Run("Users", testUsersQueryDeleteAll)
 }
 
 func TestSliceDeleteAll(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensSliceDeleteAll)
 	t.Run("AppUserProfiles", testAppUserProfilesSliceDeleteAll)
+	t.Run("AuditLogs", testAuditLogsSliceDeleteAll)
 	t.Run("ConfirmationTokens", testConfirmationTokensSliceDeleteAll)
+	t.Run("Keys", testKeysSliceDeleteAll)
+	t.Run("Nodes", testNodesSliceDeleteAll)
 	t.Run("PasswordResetTokens", testPasswordResetTokensSliceDeleteAll)
 	t.Run("PushTokens", testPushTokensSliceDeleteAll)
 	t.Run("RefreshTokens", testRefreshTokensSliceDeleteAll)
+	t.Run("SigningSessions", testSigningSessionsSliceDeleteAll)
 	t.Run("Users", testUsersSliceDeleteAll)
 }
 
 func TestExists(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensExists)
 	t.Run("AppUserProfiles", testAppUserProfilesExists)
+	t.Run("AuditLogs", testAuditLogsExists)
 	t.Run("ConfirmationTokens", testConfirmationTokensExists)
+	t.Run("Keys", testKeysExists)
+	t.Run("Nodes", testNodesExists)
 	t.Run("PasswordResetTokens", testPasswordResetTokensExists)
 	t.Run("PushTokens", testPushTokensExists)
 	t.Run("RefreshTokens", testRefreshTokensExists)
+	t.Run("SigningSessions", testSigningSessionsExists)
 	t.Run("Users", testUsersExists)
 }
 
 func TestFind(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensFind)
 	t.Run("AppUserProfiles", testAppUserProfilesFind)
+	t.Run("AuditLogs", testAuditLogsFind)
 	t.Run("ConfirmationTokens", testConfirmationTokensFind)
+	t.Run("Keys", testKeysFind)
+	t.Run("Nodes", testNodesFind)
 	t.Run("PasswordResetTokens", testPasswordResetTokensFind)
 	t.Run("PushTokens", testPushTokensFind)
 	t.Run("RefreshTokens", testRefreshTokensFind)
+	t.Run("SigningSessions", testSigningSessionsFind)
 	t.Run("Users", testUsersFind)
 }
 
 func TestBind(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensBind)
 	t.Run("AppUserProfiles", testAppUserProfilesBind)
+	t.Run("AuditLogs", testAuditLogsBind)
 	t.Run("ConfirmationTokens", testConfirmationTokensBind)
+	t.Run("Keys", testKeysBind)
+	t.Run("Nodes", testNodesBind)
 	t.Run("PasswordResetTokens", testPasswordResetTokensBind)
 	t.Run("PushTokens", testPushTokensBind)
 	t.Run("RefreshTokens", testRefreshTokensBind)
+	t.Run("SigningSessions", testSigningSessionsBind)
 	t.Run("Users", testUsersBind)
 }
 
 func TestOne(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensOne)
 	t.Run("AppUserProfiles", testAppUserProfilesOne)
+	t.Run("AuditLogs", testAuditLogsOne)
 	t.Run("ConfirmationTokens", testConfirmationTokensOne)
+	t.Run("Keys", testKeysOne)
+	t.Run("Nodes", testNodesOne)
 	t.Run("PasswordResetTokens", testPasswordResetTokensOne)
 	t.Run("PushTokens", testPushTokensOne)
 	t.Run("RefreshTokens", testRefreshTokensOne)
+	t.Run("SigningSessions", testSigningSessionsOne)
 	t.Run("Users", testUsersOne)
 }
 
 func TestAll(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensAll)
 	t.Run("AppUserProfiles", testAppUserProfilesAll)
+	t.Run("AuditLogs", testAuditLogsAll)
 	t.Run("ConfirmationTokens", testConfirmationTokensAll)
+	t.Run("Keys", testKeysAll)
+	t.Run("Nodes", testNodesAll)
 	t.Run("PasswordResetTokens", testPasswordResetTokensAll)
 	t.Run("PushTokens", testPushTokensAll)
 	t.Run("RefreshTokens", testRefreshTokensAll)
+	t.Run("SigningSessions", testSigningSessionsAll)
 	t.Run("Users", testUsersAll)
 }
 
 func TestCount(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensCount)
 	t.Run("AppUserProfiles", testAppUserProfilesCount)
+	t.Run("AuditLogs", testAuditLogsCount)
 	t.Run("ConfirmationTokens", testConfirmationTokensCount)
+	t.Run("Keys", testKeysCount)
+	t.Run("Nodes", testNodesCount)
 	t.Run("PasswordResetTokens", testPasswordResetTokensCount)
 	t.Run("PushTokens", testPushTokensCount)
 	t.Run("RefreshTokens", testRefreshTokensCount)
+	t.Run("SigningSessions", testSigningSessionsCount)
 	t.Run("Users", testUsersCount)
 }
 
@@ -116,14 +156,22 @@ func TestInsert(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensInsertWhitelist)
 	t.Run("AppUserProfiles", testAppUserProfilesInsert)
 	t.Run("AppUserProfiles", testAppUserProfilesInsertWhitelist)
+	t.Run("AuditLogs", testAuditLogsInsert)
+	t.Run("AuditLogs", testAuditLogsInsertWhitelist)
 	t.Run("ConfirmationTokens", testConfirmationTokensInsert)
 	t.Run("ConfirmationTokens", testConfirmationTokensInsertWhitelist)
+	t.Run("Keys", testKeysInsert)
+	t.Run("Keys", testKeysInsertWhitelist)
+	t.Run("Nodes", testNodesInsert)
+	t.Run("Nodes", testNodesInsertWhitelist)
 	t.Run("PasswordResetTokens", testPasswordResetTokensInsert)
 	t.Run("PasswordResetTokens", testPasswordResetTokensInsertWhitelist)
 	t.Run("PushTokens", testPushTokensInsert)
 	t.Run("PushTokens", testPushTokensInsertWhitelist)
 	t.Run("RefreshTokens", testRefreshTokensInsert)
 	t.Run("RefreshTokens", testRefreshTokensInsertWhitelist)
+	t.Run("SigningSessions", testSigningSessionsInsert)
+	t.Run("SigningSessions", testSigningSessionsInsertWhitelist)
 	t.Run("Users", testUsersInsert)
 	t.Run("Users", testUsersInsertWhitelist)
 }
@@ -131,49 +179,69 @@ func TestInsert(t *testing.T) {
 func TestReload(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensReload)
 	t.Run("AppUserProfiles", testAppUserProfilesReload)
+	t.Run("AuditLogs", testAuditLogsReload)
 	t.Run("ConfirmationTokens", testConfirmationTokensReload)
+	t.Run("Keys", testKeysReload)
+	t.Run("Nodes", testNodesReload)
 	t.Run("PasswordResetTokens", testPasswordResetTokensReload)
 	t.Run("PushTokens", testPushTokensReload)
 	t.Run("RefreshTokens", testRefreshTokensReload)
+	t.Run("SigningSessions", testSigningSessionsReload)
 	t.Run("Users", testUsersReload)
 }
 
 func TestReloadAll(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensReloadAll)
 	t.Run("AppUserProfiles", testAppUserProfilesReloadAll)
+	t.Run("AuditLogs", testAuditLogsReloadAll)
 	t.Run("ConfirmationTokens", testConfirmationTokensReloadAll)
+	t.Run("Keys", testKeysReloadAll)
+	t.Run("Nodes", testNodesReloadAll)
 	t.Run("PasswordResetTokens", testPasswordResetTokensReloadAll)
 	t.Run("PushTokens", testPushTokensReloadAll)
 	t.Run("RefreshTokens", testRefreshTokensReloadAll)
+	t.Run("SigningSessions", testSigningSessionsReloadAll)
 	t.Run("Users", testUsersReloadAll)
 }
 
 func TestSelect(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensSelect)
 	t.Run("AppUserProfiles", testAppUserProfilesSelect)
+	t.Run("AuditLogs", testAuditLogsSelect)
 	t.Run("ConfirmationTokens", testConfirmationTokensSelect)
+	t.Run("Keys", testKeysSelect)
+	t.Run("Nodes", testNodesSelect)
 	t.Run("PasswordResetTokens", testPasswordResetTokensSelect)
 	t.Run("PushTokens", testPushTokensSelect)
 	t.Run("RefreshTokens", testRefreshTokensSelect)
+	t.Run("SigningSessions", testSigningSessionsSelect)
 	t.Run("Users", testUsersSelect)
 }
 
 func TestUpdate(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensUpdate)
 	t.Run("AppUserProfiles", testAppUserProfilesUpdate)
+	t.Run("AuditLogs", testAuditLogsUpdate)
 	t.Run("ConfirmationTokens", testConfirmationTokensUpdate)
+	t.Run("Keys", testKeysUpdate)
+	t.Run("Nodes", testNodesUpdate)
 	t.Run("PasswordResetTokens", testPasswordResetTokensUpdate)
 	t.Run("PushTokens", testPushTokensUpdate)
 	t.Run("RefreshTokens", testRefreshTokensUpdate)
+	t.Run("SigningSessions", testSigningSessionsUpdate)
 	t.Run("Users", testUsersUpdate)
 }
 
 func TestSliceUpdateAll(t *testing.T) {
 	t.Run("AccessTokens", testAccessTokensSliceUpdateAll)
 	t.Run("AppUserProfiles", testAppUserProfilesSliceUpdateAll)
+	t.Run("AuditLogs", testAuditLogsSliceUpdateAll)
 	t.Run("ConfirmationTokens", testConfirmationTokensSliceUpdateAll)
+	t.Run("Keys", testKeysSliceUpdateAll)
+	t.Run("Nodes", testNodesSliceUpdateAll)
 	t.Run("PasswordResetTokens", testPasswordResetTokensSliceUpdateAll)
 	t.Run("PushTokens", testPushTokensSliceUpdateAll)
 	t.Run("RefreshTokens", testRefreshTokensSliceUpdateAll)
+	t.Run("SigningSessions", testSigningSessionsSliceUpdateAll)
 	t.Run("Users", testUsersSliceUpdateAll)
 }

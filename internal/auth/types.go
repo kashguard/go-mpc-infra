@@ -3,7 +3,7 @@ package auth
 import (
 	"time"
 
-	"allaboutapps.dev/aw/go-starter/internal/data/dto"
+	"github.com/kashguard/go-mpc-wallet/internal/data/dto"
 )
 
 type Result struct {

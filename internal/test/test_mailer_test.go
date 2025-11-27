@@ -3,9 +3,9 @@ package test_test
 import (
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/mailer/transport"
-	"allaboutapps.dev/aw/go-starter/internal/test"
-	"allaboutapps.dev/aw/go-starter/internal/test/fixtures"
+	"github.com/kashguard/go-mpc-wallet/internal/mailer/transport"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
+	"github.com/kashguard/go-mpc-wallet/internal/test/fixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package oauth2_test
 import (
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/util/oauth2"
+	"github.com/kashguard/go-mpc-wallet/internal/util/oauth2"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
-	"allaboutapps.dev/aw/go-starter/internal/util"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/util"
 )
 
 // DotEnvLoadLocalOrSkipTest tries to load the `.env.local` file in the projectroot

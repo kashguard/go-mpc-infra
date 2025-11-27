@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/util/hashing"
+	"github.com/kashguard/go-mpc-wallet/internal/util/hashing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

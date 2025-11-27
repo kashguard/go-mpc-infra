@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/test"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

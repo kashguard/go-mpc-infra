@@ -38,7 +38,7 @@ services:
     environment:
       # required: env for main working database, service
       # default for sql-migrate (target development) and psql cli tool
-      PGDATABASE: &PGDATABASE "development"
+      PGDATABASE: &PGDATABASE "mpc-dev-db"
       PGUSER: &PGUSER "dbuser"
       PGPASSWORD: &PGPASSWORD "dbpass"
       PGHOST: &PGHOST "postgres"

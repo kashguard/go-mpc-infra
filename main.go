@@ -1,6 +1,6 @@
 package main
 
-import "allaboutapps.dev/aw/go-starter/cmd"
+import "github.com/kashguard/go-mpc-wallet/cmd"
 
 func main() {
 	cmd.Execute()

@@ -1,0 +1,348 @@
+definitions:
+  PostCreateKeyPayload:
+    type: object
+    required: [algorithm, curve, threshold, total_nodes, chain_type]
+    properties:
+      algorithm:
+        type: string
+        enum: [ECDSA, EdDSA]
+        example: ECDSA
+      curve:
+        type: string
+        enum: [secp256k1, secp256r1, Ed25519]
+        example: secp256k1
+      threshold:
+        type: integer
+        minimum: 2
+        example: 2
+      total_nodes:
+        type: integer
+        minimum: 2
+        example: 3
+      chain_type:
+        type: string
+        enum: [bitcoin, ethereum, bsc, avalanche]
+        example: ethereum
+      description:
+        type: string
+        example: "企业多签钱包密钥"
+      tags:
+        type: object
+        additionalProperties:
+          type: string
+        example:
+          environment: production
+          wallet_type: multisig
+
+  CreateKeyResponse:
+    type: object
+    required: [key_id, public_key, algorithm, curve, threshold, total_nodes, chain_type, status]
+    properties:
+      key_id:
+        type: string
+        example: "key-1234567890abcdef"
+      public_key:
+        type: string
+        example: "pub-0x1234567890abcdef..."
+      algorithm:
+        type: string
+        example: "ECDSA"
+      curve:
+        type: string
+        example: "secp256k1"
+      threshold:
+        type: integer
+        example: 2
+      total_nodes:
+        type: integer
+        example: 3
+      chain_type:
+        type: string
+        example: "ethereum"
+      address:
+        type: string
+        example: "addr-0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+      status:
+        type: string
+        enum: [Active, Inactive, PendingDeletion, Deleted]
+        example: "Active"
+      description:
+        type: string
+      tags:
+        type: object
+        additionalProperties:
+          type: string
+      created_at:
+        type: string
+        format: date-time
+
+  GetKeyResponse:
+    type: object
+    required: [key_id, public_key, algorithm, curve, threshold, total_nodes, chain_type, status]
+    properties:
+      key_id:
+        type: string
+      public_key:
+        type: string
+      algorithm:
+        type: string
+      curve:
+        type: string
+      threshold:
+        type: integer
+      total_nodes:
+        type: integer
+      chain_type:
+        type: string
+      address:
+        type: string
+      status:
+        type: string
+      description:
+        type: string
+      tags:
+        type: object
+        additionalProperties:
+          type: string
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  ListKeysResponse:
+    type: object
+    required: [keys]
+    properties:
+      keys:
+        type: array
+        items:
+          $ref: "#/definitions/GetKeyResponse"
+      total:
+        type: integer
+      limit:
+        type: integer
+      offset:
+        type: integer
+
+  PostSignPayload:
+    type: object
+    required: [key_id, message]
+    properties:
+      key_id:
+        type: string
+        example: "key-1234567890abcdef"
+      message:
+        type: string
+        format: byte
+        example: "SGVsbG8gV29ybGQ="
+      message_type:
+        type: string
+        enum: [transaction, message, raw]
+        example: transaction
+      chain_type:
+        type: string
+        example: ethereum
+
+  SignResponse:
+    type: object
+    required: [signature, key_id, public_key, message, chain_type, session_id]
+    properties:
+      signature:
+        type: string
+        example: "sig-0x1234567890abcdef..."
+      key_id:
+        type: string
+      public_key:
+        type: string
+      message:
+        type: string
+      chain_type:
+        type: string
+      session_id:
+        type: string
+      signed_at:
+        type: string
+        format: date-time
+      participating_nodes:
+        type: array
+        items:
+          type: string
+
+  PostRegisterNodePayload:
+    type: object
+    required: [node_type, endpoint, public_key]
+    properties:
+      node_id:
+        type: string
+      node_type:
+        type: string
+        enum: [coordinator, participant]
+        example: participant
+      endpoint:
+        type: string
+        example: "https://node-1.example.com:8080"
+      public_key:
+        type: string
+        example: "pub-0x1234567890abcdef..."
+      capabilities:
+        type: array
+        items:
+          type: string
+        example: [gg18, gg20]
+      metadata:
+        type: object
+        additionalProperties:
+          type: string
+
+  RegisterNodeResponse:
+    type: object
+    required: [node_id, node_type, status, endpoint]
+    properties:
+      node_id:
+        type: string
+      node_type:
+        type: string
+      status:
+        type: string
+      endpoint:
+        type: string
+      public_key:
+        type: string
+      capabilities:
+        type: array
+        items:
+          type: string
+      registered_at:
+        type: string
+        format: date-time
+      last_heartbeat:
+        type: string
+        format: date-time
+
+  GetNodeResponse:
+    type: object
+    required: [node_id, node_type, status, endpoint]
+    properties:
+      node_id:
+        type: string
+      node_type:
+        type: string
+      status:
+        type: string
+      endpoint:
+        type: string
+      public_key:
+        type: string
+      capabilities:
+        type: array
+        items:
+          type: string
+      metadata:
+        type: object
+        additionalProperties:
+          type: string
+      registered_at:
+        type: string
+        format: date-time
+      last_heartbeat:
+        type: string
+        format: date-time
+
+  ListNodesResponse:
+    type: object
+    required: [nodes]
+    properties:
+      nodes:
+        type: array
+        items:
+          $ref: "#/definitions/GetNodeResponse"
+      total:
+        type: integer
+      limit:
+        type: integer
+      offset:
+        type: integer
+
+  PostCreateSessionPayload:
+    type: object
+    required: [key_id, message]
+    properties:
+      key_id:
+        type: string
+      message:
+        type: string
+        format: byte
+      protocol:
+        type: string
+        enum: [gg18, gg20, frost]
+        example: gg20
+      timeout:
+        type: integer
+        example: 300
+
+  CreateSessionResponse:
+    type: object
+    required: [session_id, key_id, protocol, status, threshold, total_nodes]
+    properties:
+      session_id:
+        type: string
+      key_id:
+        type: string
+      protocol:
+        type: string
+      status:
+        type: string
+      threshold:
+        type: integer
+      total_nodes:
+        type: integer
+      participating_nodes:
+        type: array
+        items:
+          type: string
+      created_at:
+        type: string
+        format: date-time
+      timeout:
+        type: integer
+      expires_at:
+        type: string
+        format: date-time
+
+  GetSessionResponse:
+    type: object
+    required: [session_id, key_id, protocol, status]
+    properties:
+      session_id:
+        type: string
+      key_id:
+        type: string
+      protocol:
+        type: string
+      status:
+        type: string
+      threshold:
+        type: integer
+      total_nodes:
+        type: integer
+      participating_nodes:
+        type: array
+        items:
+          type: string
+      current_round:
+        type: integer
+      total_rounds:
+        type: integer
+      signature:
+        type: string
+      created_at:
+        type: string
+        format: date-time
+      completed_at:
+        type: string
+        format: date-time
+      duration_ms:
+        type: integer
+

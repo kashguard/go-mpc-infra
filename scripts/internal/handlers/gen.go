@@ -22,7 +22,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"allaboutapps.dev/aw/go-starter/scripts/internal/util"
+	"github.com/kashguard/go-mpc-wallet/scripts/internal/util"
 )
 
 // https://blog.carlmjohnson.net/post/2016-11-27-how-to-use-go-generate/
@@ -48,7 +48,7 @@ var (
 package handlers
 
 import (
-	"allaboutapps.dev/aw/go-starter/internal/api"
+	"github.com/kashguard/go-mpc-wallet/internal/api"
 	{{- range .SubPkgs }}
 	"{{ . }}"
 	{{- end }}

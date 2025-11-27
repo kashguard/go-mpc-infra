@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"path"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
 )
 
 const (

@@ -7,7 +7,7 @@ produces:
   - application/json
 swagger: "2.0"
 info:
-  title: allaboutapps.dev/aw/go-starter
+  title: github.com/kashguard/go-mpc-wallet
   version: 0.1.0
   description: API documentation
 paths: {}
@@ -35,3 +35,35 @@ definitions:
     enum:
       - asc
       - desc
+  # MPC definitions
+  postCreateKeyPayload:
+    $ref: "../definitions/mpc.yml#/definitions/PostCreateKeyPayload"
+  createKeyResponse:
+    $ref: "../definitions/mpc.yml#/definitions/CreateKeyResponse"
+  getKeyResponse:
+    $ref: "../definitions/mpc.yml#/definitions/GetKeyResponse"
+  listKeysResponse:
+    $ref: "../definitions/mpc.yml#/definitions/ListKeysResponse"
+  postSignPayload:
+    $ref: "../definitions/mpc.yml#/definitions/PostSignPayload"
+  signResponse:
+    $ref: "../definitions/mpc.yml#/definitions/SignResponse"
+  postRegisterNodePayload:
+    $ref: "../definitions/mpc.yml#/definitions/PostRegisterNodePayload"
+  registerNodeResponse:
+    $ref: "../definitions/mpc.yml#/definitions/RegisterNodeResponse"
+  getNodeResponse:
+    $ref: "../definitions/mpc.yml#/definitions/GetNodeResponse"
+  listNodesResponse:
+    $ref: "../definitions/mpc.yml#/definitions/ListNodesResponse"
+  postCreateSessionPayload:
+    $ref: "../definitions/mpc.yml#/definitions/PostCreateSessionPayload"
+  createSessionResponse:
+    $ref: "../definitions/mpc.yml#/definitions/CreateSessionResponse"
+  getSessionResponse:
+    $ref: "../definitions/mpc.yml#/definitions/GetSessionResponse"
+responses:
+  errorResponse:
+    description: Standard error response
+    schema:
+      $ref: "../definitions/errors.yml#/definitions/PublicHTTPError"

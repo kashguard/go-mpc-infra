@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
-	"allaboutapps.dev/aw/go-starter/internal/test"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
 	migrate "github.com/rubenv/sql-migrate"
 	"github.com/stretchr/testify/require"
 )

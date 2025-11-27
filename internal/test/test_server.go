@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/api"
-	"allaboutapps.dev/aw/go-starter/internal/api/router"
-	"allaboutapps.dev/aw/go-starter/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/api"
+	"github.com/kashguard/go-mpc-wallet/internal/api/router"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
 )
 
 // WithTestServer returns a fully configured server (using the default server config).

@@ -4,13 +4,13 @@ import (
 	"database/sql"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/models"
-	"allaboutapps.dev/aw/go-starter/internal/test"
-	"allaboutapps.dev/aw/go-starter/internal/test/fixtures"
-	"allaboutapps.dev/aw/go-starter/internal/util/db"
 	"github.com/aarondl/null/v8"
 	"github.com/aarondl/sqlboiler/v4/queries"
 	"github.com/aarondl/sqlboiler/v4/queries/qm"
+	"github.com/kashguard/go-mpc-wallet/internal/models"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
+	"github.com/kashguard/go-mpc-wallet/internal/test/fixtures"
+	"github.com/kashguard/go-mpc-wallet/internal/util/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

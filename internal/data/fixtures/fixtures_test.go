@@ -3,8 +3,8 @@ package fixtures_test
 import (
 	"testing"
 
-	data "allaboutapps.dev/aw/go-starter/internal/data/fixtures"
-	"allaboutapps.dev/aw/go-starter/internal/models"
+	data "github.com/kashguard/go-mpc-wallet/internal/data/fixtures"
+	"github.com/kashguard/go-mpc-wallet/internal/models"
 	"github.com/stretchr/testify/assert"
 )
 

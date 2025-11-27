@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"allaboutapps.dev/aw/go-starter/scripts/internal/util"
+	"github.com/kashguard/go-mpc-wallet/scripts/internal/util"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )

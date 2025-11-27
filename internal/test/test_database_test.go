@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"allaboutapps.dev/aw/go-starter/internal/config"
-	"allaboutapps.dev/aw/go-starter/internal/test"
-	pUtil "allaboutapps.dev/aw/go-starter/internal/util"
+	"github.com/kashguard/go-mpc-wallet/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/test"
+	pUtil "github.com/kashguard/go-mpc-wallet/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

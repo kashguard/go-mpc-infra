@@ -3,9 +3,9 @@ package auth
 import (
 	"context"
 
-	"allaboutapps.dev/aw/go-starter/internal/data/dto"
-	"allaboutapps.dev/aw/go-starter/internal/util"
 	"github.com/go-openapi/swag"
+	"github.com/kashguard/go-mpc-wallet/internal/data/dto"
+	"github.com/kashguard/go-mpc-wallet/internal/util"
 	"github.com/labstack/echo/v4"
 )
 
