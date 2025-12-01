@@ -420,8 +420,8 @@ graph TD
 **核心功能**：
 - **签名会话管理**：创建、监控、销毁签名会话
 - **节点调度**：选择合适的Participant节点参与签名
-- **协议协调**：调用协议引擎执行MPC协议
-- **结果聚合**：收集和聚合签名分片
+- **协议协调**：轻量级协调，不接触私钥分片
+- **消息路由**：通过gRPC转发协议消息（tss-lib自动聚合签名）
 
 #### 2.1.2 内部组件设计
 
@@ -442,11 +442,11 @@ Coordinator Service 内部架构
 │   ├── 消息路由转发
 │   ├── 进度状态同步
 │   └── 错误处理重试
-└── Result Aggregator (结果聚合器)
-    ├── 分片收集验证
-    ├── 聚合计算逻辑
-    ├── 最终结果生成
-    └── 结果验证检查
+└── Message Router (消息路由器)
+    ├── gRPC消息转发
+    ├── 节点间通信协调
+    ├── 会话状态同步
+    └── 错误处理和重试
 ```
 
 #### 2.1.3 关键接口设计
@@ -816,27 +816,38 @@ sequenceDiagram
     P2->>Coordinator: 发送份额验证
     P3->>Coordinator: 发送份额验证
 
-    Coordinator->>Coordinator: 验证所有份额
-    Coordinator->>Coordinator: 计算公钥
+    Note over P1,P3: Round 2: 节点间交换DKG消息（通过gRPC）
 
-    Coordinator->>P1: 分发加密份额
-    Coordinator->>P2: 分发加密份额
-    Coordinator->>P3: 分发加密份额
+    P1->>P2: gRPC: DKG消息 (tss.Message)
+    P1->>P3: gRPC: DKG消息 (tss.Message)
+    P2->>P1: gRPC: DKG消息 (tss.Message)
+    P2->>P3: gRPC: DKG消息 (tss.Message)
+    P3->>P1: gRPC: DKG消息 (tss.Message)
+    P3->>P2: gRPC: DKG消息 (tss.Message)
 
-    P1->>Storage: 存储加密份额
-    P2->>Storage: 存储加密份额
-    P3->>Storage: 存储加密份额
+    Note over P1,P3: tss-lib完成DKG，每个节点生成自己的密钥分片
+
+    P1->>P1: 生成LocalPartySaveData（包含私钥分片）
+    P2->>P2: 生成LocalPartySaveData（包含私钥分片）
+    P3->>P3: 生成LocalPartySaveData（包含私钥分片）
+
+    P1->>Storage: 存储本地密钥分片（加密）
+    P2->>Storage: 存储本地密钥分片（加密）
+    P3->>Storage: 存储本地密钥分片（加密）
+
+    Note over Coordinator: Coordinator只保存公钥和元数据，不接触私钥分片
 
     Coordinator->>Storage: 保存密钥元数据
     Coordinator-->>Client: 返回密钥信息
 ```
 
-实现要点（详见 [`internal/mpc/protocol/gg18_dkg.go`](internal/mpc/protocol/gg18_dkg.go)）：
-- DKG 使用 `secp256k1` 私钥作为秘密，将其视为多项式常数项，利用 `SHA-256(secret || coefficient_index)`  deterministically 派生多项式系数，确保测试可复现。
-- 通过 `splitSecret` 将私钥拆分为 `TotalNodes` 份 Shamir Shares，每份附带 `ShareID`、`NodeID`、索引，写回 `KeyGenResponse`，同时缓存到 `GG18Protocol` 内部记录中，方便后续签名阶段组合。
-- 若调用方未提供 `NodeIDs`，协议会自动生成 `node-XX` 序列，避免上层协调逻辑阻塞。
-- `reconstructSecret`/`lagrangeInterpolate` 提供阈值恢复能力，用于单元测试和模拟签名阶段，严格按照有限域 `curve.N` 进行插值与模反运算。
-- 单元测试 [`internal/mpc/protocol/gg18_dkg_test.go`](internal/mpc/protocol/gg18_dkg_test.go) 覆盖 2-of-3 场景，验证 share 数量、自动 NodeID、生成功能及秘密恢复一致性。
+**tss-lib分布式签名架构要点**（详见 [`internal/mpc/protocol/tss_adapter.go`](internal/mpc/protocol/tss_adapter.go)）：
+- **分布式密钥生成（DKG）**：使用tss-lib的`keygen.LocalParty`，每个节点独立参与DKG协议，生成自己的`LocalPartySaveData`（包含私钥分片`Xi`），密钥分片永不离开节点。
+- **消息路由**：通过gRPC实现节点间消息交换，`messageRouter`函数将tss-lib的`tss.Message`序列化后发送到目标节点。
+- **消息接收处理**：`ProcessIncomingKeygenMessage`和`ProcessIncomingSigningMessage`接收gRPC消息，解析后调用`party.UpdateFromBytes`更新Party状态。
+- **签名聚合**：tss-lib自动完成签名聚合，每个参与节点都能得到完整签名，无需Coordinator收集分片。
+- **Coordinator角色**：简化为轻量级协调者，负责会话管理、节点发现和审计，不接触私钥分片。
+- **密钥分片存储**：每个Participant节点独立存储自己的`LocalPartySaveData`（加密存储），Coordinator只保存公钥和元数据。
 
 ---
 
@@ -1722,10 +1733,28 @@ data:
 
 ---
 
-**文档版本**: v2.0
-**最后更新**: 2024-11-28
+**文档版本**: v2.1
+**最后更新**: 2025-01-02
 **维护团队**: MPC 开发团队
-**文档状态**: 详细设计完成，等待开发实施
+**文档状态**: 详细设计完成，已实现tss-lib分布式签名架构
+
+---
+
+## 更新日志
+
+### 2025-01-02 - tss-lib分布式签名架构更新
+
+**架构变更**：
+- ✅ 更新签名流程：tss-lib自动聚合签名，Coordinator不再聚合签名分片
+- ✅ 更新DKG流程：每个节点独立参与DKG，密钥分片不离开节点
+- ✅ 添加gRPC通信层详细说明：客户端和服务端实现
+- ✅ 添加消息接收处理机制：ProcessIncomingKeygenMessage和ProcessIncomingSigningMessage
+- ✅ 更新Coordinator角色：简化为轻量级协调者，不接触私钥分片
+
+**关键改进**：
+- 采用tss-lib分布式签名方案，符合MPC安全原则
+- 密钥分片永不完整存在，每个节点只保存自己的分片
+- 节点间通过gRPC直接通信，Coordinator只负责协调和审计
 
 ---
 
