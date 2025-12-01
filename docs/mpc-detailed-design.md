@@ -620,14 +620,24 @@ sequenceDiagram
     Coordinator->>P2: 广播所有承诺
     Coordinator->>P3: 广播所有承诺
 
-    Note over P1,P3: Round 2: 验证承诺并计算签名分片
+    Note over P1,P3: Round 2: 节点间交换签名消息（通过gRPC）
 
-    P1->>Coordinator: 发送签名分片 (signature_share_1)
-    P2->>Coordinator: 发送签名分片 (signature_share_2)
-    P3->>Coordinator: 发送签名分片 (signature_share_3)
+    P1->>P2: gRPC: 签名消息 (tss.Message)
+    P1->>P3: gRPC: 签名消息 (tss.Message)
+    P2->>P1: gRPC: 签名消息 (tss.Message)
+    P2->>P3: gRPC: 签名消息 (tss.Message)
+    P3->>P1: gRPC: 签名消息 (tss.Message)
+    P3->>P2: gRPC: 签名消息 (tss.Message)
 
-    Coordinator->>Coordinator: 聚合签名分片 (2-of-3)
-    Coordinator->>Coordinator: 构造最终签名
+    Note over P1,P3: tss-lib自动聚合签名，每个节点得到完整签名
+
+    P1->>P1: tss-lib聚合签名
+    P2->>P2: tss-lib聚合签名
+    P3->>P3: tss-lib聚合签名
+
+    P1->>Coordinator: 返回最终签名
+    P2->>Coordinator: 返回最终签名
+    P3->>Coordinator: 返回最终签名
 ```
 
 ### 2.3 Protocol Engine (协议引擎)
