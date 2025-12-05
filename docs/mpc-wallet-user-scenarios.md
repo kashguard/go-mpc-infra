@@ -18,6 +18,7 @@
 - [3. 核心价值](#3-核心价值)
 - [4. 个人用户使用场景](#4-个人用户使用场景)
 - [5. 团队用户使用场景](#5-团队用户使用场景)
+  - [5.5 Client Signer 程序化签名](#55-场景五client-signer-程序化签名)
 - [6. 混合使用场景](#6-混合使用场景)
 - [7. 常见问题解答](#7-常见问题解答)
 - [8. 最佳实践](#8-最佳实践)
@@ -885,9 +886,243 @@ sequenceDiagram
 - 大额交易（≥ 5,000 USDT）：2 个 Manager 批准
 ```
 
-### 5.5 场景五：审计与合规
+### 5.5 场景五：Client Signer 程序化签名
 
-#### 5.5.1 审计日志查看
+#### 5.5.1 什么是 Client Signer？
+
+**Client Signer（客户端签名器）** 是一个程序化签名服务，用于自动化创建和签名交易。它持有密钥分片，可以自动参与 MPC 签名计算。
+
+**适用场景**：
+- ✅ 需要自动化创建交易（如批量工资发放、空投）
+- ✅ 需要7x24小时服务（高频交易场景）
+- ✅ 需要与业务系统集成（API调用）
+- ✅ 需要减少人工干预（提高效率）
+
+**与手动批准的区别**：
+
+| 特性 | 手动批准（APP） | Client Signer |
+|------|---------------|---------------|
+| **使用方式** | 团队成员通过APP批准 | 程序化自动签名 |
+| **适用场景** | 日常交易审批 | 批量操作、自动化流程 |
+| **响应速度** | 依赖人工响应 | 自动响应，毫秒级 |
+| **部署要求** | 无需部署 | 需要部署Client Signer服务 |
+| **安全级别** | 人工审核，安全性高 | 需要配置验证规则 |
+
+#### 5.5.2 是否需要部署 Client Signer？
+
+**答案：不是必须的，取决于使用场景。**
+
+**场景一：纯手动批准（不需要 Client Signer）**
+
+```
+适用场景：
+- 小团队（<10人）
+- 交易频率低
+- 需要人工审核
+
+工作方式：
+- 团队成员通过APP批准交易
+- 无需部署Client Signer
+- 简单易用
+```
+
+**场景二：混合模式（推荐用于企业）**
+
+```
+适用场景：
+- 需要自动化创建交易
+- 需要批量处理
+- 需要与业务系统集成
+
+工作方式：
+- 业务系统部署Client Signer（程序化创建交易）
+- 团队成员通过APP批准
+- 结合自动化和人工审核
+```
+
+**场景三：完全程序化（高级场景）**
+
+```
+适用场景：
+- 高频交易
+- 7x24小时服务
+- 完全自动化流程
+
+工作方式：
+- 部署多个Client Signer（高可用）
+- 配置自动批准规则
+- 完全自动化处理
+```
+
+#### 5.5.3 Client Signer 使用流程
+
+```mermaid
+sequenceDiagram
+    participant System as 业务系统
+    participant Signer as Client Signer<br/>持有密钥分片
+    participant Verifier as Callback Verifier<br/>验证器
+    participant Server as MPC服务器
+    participant Manager as 团队成员<br/>APP批准
+    participant Blockchain as 区块链
+
+    System->>Server: 1. 通过API创建签名请求
+    Server->>Signer: 2. 通知Client Signer参与签名
+    Server->>Verifier: 3. 回调验证器验证请求
+    Verifier->>Verifier: 4. 验证交易信息
+    Verifier->>Verifier: 5. 检查自动批准规则
+    Verifier->>Server: 6. 返回批准结果
+    
+    alt 自动批准
+        Verifier->>Server: 自动批准（小额/白名单）
+    else 需要人工审批
+        Server->>Manager: 7. 推送审批通知
+        Manager->>Server: 8. 通过APP批准
+    end
+    
+    Server->>Signer: 9. 通知参与MPC签名
+    Signer->>Signer: 10. 使用密钥分片计算签名
+    Signer->>Server: 11. 返回签名分片
+    Server->>Server: 12. 聚合签名
+    Server->>Blockchain: 13. 广播交易
+    Blockchain->>Server: 14. 返回交易哈希
+    Server->>System: 15. 返回交易结果
+```
+
+#### 5.5.4 部署 Client Signer 的步骤
+
+**步骤1：生成密钥对**
+
+```bash
+# 生成Ed25519密钥对（用于Client Signer身份认证）
+ssh-keygen -t ed25519 -C "client_signer_production"
+# 不要设置密码
+# 保存私钥到安全位置
+```
+
+**步骤2：在Web控制台创建Client Signer**
+
+1. 登录Web控制台
+2. 进入"团队与交易策略"页面
+3. 点击"新建Client Signer"
+4. 输入信息：
+   - **名称**：Client Signer的唯一标识
+   - **公钥**：粘贴刚才生成的公钥内容
+   - **IP白名单**：指定最多3个IP地址（可选，提高安全性）
+5. 点击"确认"
+6. 等待管理员审批（需要多签审批）
+
+**步骤3：配置密钥访问权限**
+
+- 选择Client Signer可以访问的密钥
+- 设置访问级别（只读/读写）
+- 配置自动批准规则（可选）
+
+**步骤4：部署Client Signer服务**
+
+Client Signer需要部署在您的服务器上，可以：
+- 部署在业务系统同一服务器
+- 部署在独立的服务器（推荐，提高安全性）
+- 部署多个实例（高可用）
+
+#### 5.5.5 Client Signer 使用示例
+
+**示例一：批量工资发放**
+
+```python
+# 业务系统通过API创建批量转账
+import requests
+
+# 1. 创建批量转账请求
+batch_request = {
+    "wallet_id": "wallet-123",
+    "items": [
+        {"address": "0x123...", "amount": "1000", "token": "USDT"},
+        {"address": "0x456...", "amount": "2000", "token": "USDT"},
+        # ... 更多员工
+    ]
+}
+
+response = requests.post(
+    "https://api.mpc.example.com/v1/batch-transfer",
+    json=batch_request,
+    headers={"Authorization": "Bearer YOUR_API_KEY"}
+)
+
+# 2. Client Signer自动参与签名
+# 3. 系统自动处理每笔交易
+# 4. 返回执行结果
+```
+
+**示例二：自动空投**
+
+```python
+# 项目方进行代币空投
+airdrop_request = {
+    "wallet_id": "wallet-456",
+    "token": "PROJECT_TOKEN",
+    "amount_per_user": "100",
+    "addresses": [
+        "0x111...",
+        "0x222...",
+        # ... 用户地址列表
+    ]
+}
+
+# Client Signer自动处理，无需人工干预
+```
+
+#### 5.5.6 安全配置建议
+
+**自动批准规则配置**：
+
+```yaml
+auto_approval_rules:
+  # 小额交易自动批准
+  - condition:
+      amount: "< 1000"
+      currency: "USDT"
+    action: "auto_approve"
+  
+  # 白名单地址自动批准
+  - condition:
+      destination: "whitelist"
+    action: "auto_approve"
+  
+  # 大额交易需要人工审批
+  - condition:
+      amount: ">= 10000"
+      currency: "USDT"
+    action: "require_manual_approval"
+```
+
+**安全建议**：
+- ✅ 设置IP白名单，限制Client Signer访问来源
+- ✅ 配置自动批准规则，避免大额交易自动执行
+- ✅ 定期审查Client Signer的访问权限
+- ✅ 监控Client Signer的操作日志
+- ✅ 部署多个Client Signer实现高可用
+
+#### 5.5.7 常见问题
+
+**Q: 每个团队成员都需要部署Client Signer吗？**
+A: 不是。Client Signer主要用于程序化签名场景。团队成员可以通过APP进行手动批准，无需部署Client Signer。
+
+**Q: Client Signer和团队成员批准有什么区别？**
+A: 
+- **Client Signer**：程序化自动签名，适合批量操作和自动化流程
+- **团队成员批准**：人工审核批准，适合需要人工判断的场景
+- 两者可以结合使用：Client Signer创建交易，团队成员批准
+
+**Q: 部署Client Signer安全吗？**
+A: 是的，但需要正确配置：
+- 设置IP白名单
+- 配置自动批准规则
+- 定期审查权限
+- 监控操作日志
+
+### 5.6 场景六：审计与合规
+
+#### 5.6.1 审计日志查看
 
 ```mermaid
 flowchart TD
@@ -903,7 +1138,7 @@ flowchart TD
     H --> I[导出日志]
 ```
 
-#### 5.5.2 审计日志内容
+#### 5.6.2 审计日志内容
 
 **记录的操作类型**：
 - 钱包创建和删除
@@ -922,7 +1157,7 @@ flowchart TD
 - IP地址
 - 设备信息
 
-#### 5.5.3 合规报告
+#### 5.6.3 合规报告
 
 **自动生成报告**：
 - 每日交易汇总
