@@ -110,7 +110,7 @@ services:
         # 启动服务器
         exec /app/bin/app server
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/-/healthy?mgmt-secret=mgmtpass"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8080/-/healthy?mgmt-secret=mgmtpass"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -216,7 +216,7 @@ services:
         # 启动服务器
         exec /app/bin/app server
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/-/healthy"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8081/-/healthy?mgmt-secret=mgmtpass"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -322,7 +322,7 @@ services:
         # 启动服务器
         exec /app/bin/app server
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8082/-/healthy"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8082/-/healthy?mgmt-secret=mgmtpass"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -428,7 +428,7 @@ services:
         # 启动服务器
         exec /app/bin/app server
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8083/-/healthy"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8083/-/healthy?mgmt-secret=mgmtpass"]
       interval: 10s
       timeout: 5s
       retries: 3
