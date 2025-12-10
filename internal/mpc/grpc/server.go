@@ -11,6 +11,7 @@ import (
 	"github.com/kashguard/go-mpc-wallet/internal/config"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
+	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
 	pb "github.com/kashguard/go-mpc-wallet/internal/pb/mpc/v1"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -26,10 +27,11 @@ import (
 type GRPCServer struct {
 	pb.UnimplementedMPCNodeServer
 
-	protocolEngine protocol.Engine
-	sessionManager *session.Manager
-	nodeID         string
-	cfg            *ServerConfig
+	protocolEngine  protocol.Engine
+	sessionManager  *session.Manager
+	keyShareStorage storage.KeyShareStorage // 用于存储密钥分片
+	nodeID          string
+	cfg             *ServerConfig
 
 	// gRPC 服务器实例
 	grpcServer *grpc.Server
@@ -55,6 +57,7 @@ func NewGRPCServer(
 	cfg config.Server,
 	protocolEngine protocol.Engine,
 	sessionManager *session.Manager,
+	keyShareStorage storage.KeyShareStorage,
 	nodeID string,
 ) *GRPCServer {
 	serverCfg := &ServerConfig{
@@ -65,10 +68,11 @@ func NewGRPCServer(
 	}
 
 	srv := &GRPCServer{
-		protocolEngine: protocolEngine,
-		sessionManager: sessionManager,
-		nodeID:         nodeID,
-		cfg:            serverCfg,
+		protocolEngine:  protocolEngine,
+		sessionManager:  sessionManager,
+		keyShareStorage: keyShareStorage,
+		nodeID:          nodeID,
+		cfg:             serverCfg,
 	}
 
 	return srv
@@ -273,7 +277,36 @@ func (s *GRPCServer) StartDKG(ctx context.Context, req *pb.StartDKGRequest) (*pb
 					Str("session_id", sessionID).
 					Str("this_node_id", s.nodeID).
 					Str("public_key", resp.PublicKey.Hex).
+					Int("key_share_count", len(resp.KeyShares)).
 					Msg("GenerateKeyShare completed successfully in StartDKG RPC goroutine")
+
+				// 存储密钥分片（只存储当前节点的分片）
+				if s.keyShareStorage != nil && len(resp.KeyShares) > 0 {
+					for nodeID, share := range resp.KeyShares {
+						if err := s.keyShareStorage.StoreKeyShare(keygenCtx, req.KeyId, nodeID, share.Share); err != nil {
+							log.Error().
+								Err(err).
+								Str("key_id", req.KeyId).
+								Str("node_id", nodeID).
+								Str("this_node_id", s.nodeID).
+								Msg("Failed to store key share in StartDKG RPC goroutine")
+						} else {
+							log.Info().
+								Str("key_id", req.KeyId).
+								Str("node_id", nodeID).
+								Str("this_node_id", s.nodeID).
+								Msg("Key share stored successfully in StartDKG RPC goroutine")
+						}
+					}
+				} else {
+					log.Warn().
+						Str("key_id", req.KeyId).
+						Str("this_node_id", s.nodeID).
+						Bool("keyShareStorage_nil", s.keyShareStorage == nil).
+						Int("key_share_count", len(resp.KeyShares)).
+						Msg("Key share storage skipped (keyShareStorage is nil or no key shares)")
+				}
+
 				// DKG完成，更新会话
 				if err := s.sessionManager.CompleteKeygenSession(keygenCtx, req.KeyId, resp.PublicKey.Hex); err != nil {
 					log.Error().
@@ -407,16 +440,34 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 						Msg("Auto-starting DKG protocol on participant (triggered by incoming message)")
 
 					// 从会话中获取DKG参数
-					// 注意：Algorithm和Curve需要从密钥元数据中获取，但会话中没有
-					// 暂时使用默认值，后续可以从keyID对应的密钥元数据中获取
+					// 根据协议类型推断算法和曲线
+					algorithm := "ECDSA"
+					curve := "secp256k1"
+					protocolLower := strings.ToLower(sess.Protocol)
+					if protocolLower == "frost" {
+						algorithm = "EdDSA"
+						curve = "ed25519"
+					} else if protocolLower == "gg18" || protocolLower == "gg20" {
+						algorithm = "ECDSA"
+						curve = "secp256k1"
+					}
+
 					dkgReq := &protocol.KeyGenRequest{
 						KeyID:      sess.KeyID,  // DKG会话使用keyID作为sessionID
-						Algorithm:  "ECDSA",     // 默认值，应该从密钥元数据中获取
-						Curve:      "secp256k1", // 默认值，应该从密钥元数据中获取
+						Algorithm:  algorithm,
+						Curve:      curve,
 						Threshold:  sess.Threshold,
 						TotalNodes: sess.TotalNodes,
 						NodeIDs:    sess.ParticipatingNodes,
 					}
+
+					log.Debug().
+						Str("session_id", sessionID).
+						Str("key_id", sess.KeyID).
+						Str("protocol", sess.Protocol).
+						Str("algorithm", algorithm).
+						Str("curve", curve).
+						Msg("Auto-start DKG request parameters determined from session protocol")
 
 					// 启动DKG协议（在后台，不阻塞）
 					// 消息会被放入队列，等待DKG协议启动后处理
@@ -434,9 +485,38 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 							Str("key_id", sess.KeyID).
 							Str("this_node_id", s.nodeID).
 							Str("public_key", resp.PublicKey.Hex).
-							Msg("DKG protocol completed successfully on participant, calling CompleteKeygenSession")
+							Int("key_share_count", len(resp.KeyShares)).
+							Msg("DKG protocol completed successfully on participant, storing key share and calling CompleteKeygenSession")
+
+						// 存储密钥分片（只存储当前节点的分片）
+						if s.keyShareStorage != nil && len(resp.KeyShares) > 0 {
+							for nodeID, share := range resp.KeyShares {
+								if err := s.keyShareStorage.StoreKeyShare(keygenCtx, sess.KeyID, nodeID, share.Share); err != nil {
+									log.Error().
+										Err(err).
+										Str("key_id", sess.KeyID).
+										Str("node_id", nodeID).
+										Str("this_node_id", s.nodeID).
+										Msg("Failed to store key share in auto-start goroutine")
+								} else {
+									log.Info().
+										Str("key_id", sess.KeyID).
+										Str("node_id", nodeID).
+										Str("this_node_id", s.nodeID).
+										Msg("Key share stored successfully in auto-start goroutine")
+								}
+							}
+						} else {
+							log.Warn().
+								Str("key_id", sess.KeyID).
+								Str("this_node_id", s.nodeID).
+								Bool("keyShareStorage_nil", s.keyShareStorage == nil).
+								Int("key_share_count", len(resp.KeyShares)).
+								Msg("Key share storage skipped in auto-start (keyShareStorage is nil or no key shares)")
+						}
+
 						// DKG 完成，直接更新会话与密钥（共享数据库）
-						if err := s.sessionManager.CompleteKeygenSession(ctx, sess.KeyID, resp.PublicKey.Hex); err != nil {
+						if err := s.sessionManager.CompleteKeygenSession(keygenCtx, sess.KeyID, resp.PublicKey.Hex); err != nil {
 							log.Error().
 								Err(err).
 								Str("session_id", sessionID).

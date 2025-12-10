@@ -688,9 +688,10 @@ func (m *tssPartyManager) ProcessIncomingKeygenMessage(
 		isBroadcast: isBroadcast,
 	}
 
-	// 检查是否有活跃的DKG实例
+	// 检查是否有活跃的DKG实例（支持 ECDSA 和 EdDSA）
 	m.mu.RLock()
 	_, hasActiveKeygen := m.activeKeygen[sessionID]
+	_, hasActiveEdDSAKeygen := m.activeEdDSAKeygen[sessionID]
 	m.mu.RUnlock()
 
 	log.Debug().
@@ -699,6 +700,7 @@ func (m *tssPartyManager) ProcessIncomingKeygenMessage(
 		Bool("is_broadcast", isBroadcast).
 		Int("msg_bytes_len", len(msgBytes)).
 		Bool("has_active_keygen", hasActiveKeygen).
+		Bool("has_active_eddsa_keygen", hasActiveEdDSAKeygen).
 		Bool("queue_exists", exists).
 		Msg("Processing incoming DKG message")
 
@@ -913,6 +915,22 @@ func (m *tssPartyManager) executeEdDSAKeygen(
 	m.sessionIDMap[keyID] = keyID
 	m.mu.Unlock()
 
+	// 创建消息队列（如果不存在）
+	m.mu.Lock()
+	msgCh, exists := m.incomingKeygenMessages[keyID]
+	if !exists {
+		msgCh = make(chan *incomingMessage, 100)
+		m.incomingKeygenMessages[keyID] = msgCh
+		log.Info().
+			Str("key_id", keyID).
+			Msg("Created incomingKeygenMessages channel for EdDSA DKG")
+	} else {
+		log.Info().
+			Str("key_id", keyID).
+			Msg("Reusing existing incomingKeygenMessages channel for EdDSA DKG")
+	}
+	m.mu.Unlock()
+
 	// 启动协议
 	go func() {
 		if err := party.Start(); err != nil {
@@ -920,8 +938,82 @@ func (m *tssPartyManager) executeEdDSAKeygen(
 		}
 	}()
 
+	// 启动消息处理循环：从队列读取消息并注入到party
+	go func() {
+		log.Info().
+			Str("key_id", keyID).
+			Str("this_node_id", thisNodeID).
+			Msg("Starting message processing loop for EdDSA DKG")
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info().
+					Str("key_id", keyID).
+					Str("this_node_id", thisNodeID).
+					Msg("EdDSA DKG message processing loop stopped due to context cancellation")
+				return
+			case incomingMsg, ok := <-msgCh:
+				if !ok {
+					log.Info().
+						Str("key_id", keyID).
+						Str("this_node_id", thisNodeID).
+						Msg("EdDSA DKG message processing loop stopped: channel closed")
+					return
+				}
+				log.Debug().
+					Str("key_id", keyID).
+					Str("from_node_id", incomingMsg.fromNodeID).
+					Bool("is_broadcast", incomingMsg.isBroadcast).
+					Int("msg_bytes_len", len(incomingMsg.msgBytes)).
+					Msg("Received message in EdDSA DKG processing loop")
+
+				// 获取LocalParty实例
+				m.mu.RLock()
+				localParty, exists := m.activeEdDSAKeygen[keyID]
+				m.mu.RUnlock()
+
+				if !exists {
+					log.Debug().
+						Str("key_id", keyID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Msg("EdDSA LocalParty not yet created, message will be processed when party starts")
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				// 获取发送方的PartyID
+				fromPartyID, ok := m.nodeIDToPartyID[incomingMsg.fromNodeID]
+				if !ok {
+					log.Warn().
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Str("key_id", keyID).
+						Msg("PartyID not found for node in EdDSA DKG")
+					continue
+				}
+
+				// 使用UpdateFromBytes将消息注入到LocalParty
+				ok, tssErr := localParty.UpdateFromBytes(incomingMsg.msgBytes, fromPartyID, incomingMsg.isBroadcast)
+				if !ok || tssErr != nil {
+					log.Warn().
+						Err(tssErr).
+						Str("key_id", keyID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Bool("is_broadcast", incomingMsg.isBroadcast).
+						Msg("Failed to update EdDSA local party from bytes")
+					continue
+				} else {
+					log.Debug().
+						Str("key_id", keyID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Bool("is_broadcast", incomingMsg.isBroadcast).
+						Msg("Successfully updated EdDSA local party from bytes")
+				}
+			}
+		}
+	}()
+
 	// 处理消息和结果
-	timeout := time.NewTimer(5 * time.Minute)
+	timeout := time.NewTimer(10 * time.Minute)
 	defer timeout.Stop()
 
 	for {
@@ -932,29 +1024,92 @@ func (m *tssPartyManager) executeEdDSAKeygen(
 			return nil, errors.New("EdDSA keygen timeout")
 		case msg := <-outCh:
 			// 路由消息到其他节点
-			if m.messageRouter != nil {
-				// 获取会话ID（keyID作为sessionID）
-				sessionID := keyID
+			if m.messageRouter == nil {
+				return nil, errors.Errorf("messageRouter is nil (keyID: %s, thisNodeID: %s)", keyID, thisNodeID)
+			}
+
+			// 获取会话ID（keyID作为sessionID）
+			sessionID := keyID
+			m.mu.RLock()
+			if mappedID, ok := m.sessionIDMap[keyID]; ok {
+				sessionID = mappedID
+			}
+			m.mu.RUnlock()
+
+			targetNodes := msg.GetTo()
+			log.Debug().
+				Str("key_id", keyID).
+				Str("this_node_id", thisNodeID).
+				Int("target_count", len(targetNodes)).
+				Str("message_type", fmt.Sprintf("%T", msg)).
+				Msg("Received message from EdDSA tss-lib outCh, routing to other nodes")
+
+			// 处理广播消息（targetCount=0）
+			if len(targetNodes) == 0 {
+				// 广播消息：发送给所有其他节点
+				log.Info().
+					Str("key_id", keyID).
+					Str("this_node_id", thisNodeID).
+					Int("party_count", len(m.nodeIDToPartyID)).
+					Msg("EdDSA DKG message has no target nodes, broadcasting to all other nodes")
+
+				// 获取所有其他节点的 PartyID
 				m.mu.RLock()
-				if mappedID, ok := m.sessionIDMap[keyID]; ok {
-					sessionID = mappedID
+				allPartyIDs := make([]*tss.PartyID, 0, len(m.nodeIDToPartyID))
+				for nodeID, partyID := range m.nodeIDToPartyID {
+					if nodeID != thisNodeID {
+						allPartyIDs = append(allPartyIDs, partyID)
+					}
 				}
 				m.mu.RUnlock()
 
-				// 路由到所有目标节点
-				for _, to := range msg.GetTo() {
-					targetNodeID, ok := m.getNodeID(to.Id)
+				// 将消息发送给所有其他节点（标记 isBroadcast）
+				for _, partyID := range allPartyIDs {
+					targetNodeID, ok := m.partyIDToNodeID[partyID.Id]
 					if !ok {
-						return nil, errors.Errorf("party ID to node ID mapping not found: %s", to.Id)
+						log.Error().
+							Str("partyID", partyID.Id).
+							Str("keyID", keyID).
+							Msg("Failed to find nodeID for partyID in EdDSA DKG broadcast")
+						continue
 					}
-					if err := m.messageRouter(sessionID, targetNodeID, msg, false); err != nil {
-						return nil, errors.Wrapf(err, "route message to node %s", targetNodeID)
+
+					log.Info().
+						Str("keyID", keyID).
+						Str("targetNodeID", targetNodeID).
+						Str("partyID", partyID.Id).
+						Msg("Broadcasting EdDSA DKG message to node (marked isBroadcast)")
+
+					if err := m.messageRouter(sessionID, targetNodeID, msg, true); err != nil {
+						log.Error().
+							Err(err).
+							Str("keyID", keyID).
+							Str("targetNodeID", targetNodeID).
+							Msg("Failed to broadcast EdDSA DKG message to node")
+						// 继续发送给其他节点，不因为一个节点失败而停止
 					}
+				}
+				continue // 跳过下面的循环
+			}
+
+			// 处理定向消息
+			for _, to := range targetNodes {
+				targetNodeID, ok := m.getNodeID(to.Id)
+				if !ok {
+					return nil, errors.Errorf("party ID to node ID mapping not found: %s", to.Id)
+				}
+				if err := m.messageRouter(sessionID, targetNodeID, msg, false); err != nil {
+					return nil, errors.Wrapf(err, "route EdDSA DKG message to node %s", targetNodeID)
 				}
 			}
 		case saveData := <-endCh:
 			m.mu.Lock()
 			delete(m.activeEdDSAKeygen, keyID)
+			// 清理消息队列
+			if ch, ok := m.incomingKeygenMessages[keyID]; ok {
+				close(ch)
+				delete(m.incomingKeygenMessages, keyID)
+			}
 			m.mu.Unlock()
 			if saveData == nil {
 				return nil, errors.New("EdDSA keygen returned nil save data")
@@ -963,6 +1118,11 @@ func (m *tssPartyManager) executeEdDSAKeygen(
 		case err := <-errCh:
 			m.mu.Lock()
 			delete(m.activeEdDSAKeygen, keyID)
+			// 清理消息队列
+			if ch, ok := m.incomingKeygenMessages[keyID]; ok {
+				close(ch)
+				delete(m.incomingKeygenMessages, keyID)
+			}
 			m.mu.Unlock()
 			return nil, errors.Wrap(err, "EdDSA keygen error")
 		}
