@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/kashguard/tss-lib/common"
@@ -281,8 +282,9 @@ func (p *FROSTProtocol) ValidateKeyGenRequest(req *KeyGenRequest) error {
 		return errors.New("key generation request is nil")
 	}
 
-	// FROST 支持 Ed25519 曲线
-	if req.Curve != "" && req.Curve != "ed25519" && req.Curve != "secp256k1" {
+	// FROST 支持 Ed25519 曲线（大小写不敏感）
+	curveLower := strings.ToLower(req.Curve)
+	if req.Curve != "" && curveLower != "ed25519" && curveLower != "secp256k1" {
 		return errors.Errorf("unsupported curve for FROST: %s (supported: ed25519, secp256k1)", req.Curve)
 	}
 
@@ -309,6 +311,27 @@ func (p *FROSTProtocol) ValidateSignRequest(req *SignRequest) error {
 // RotateKey 密钥轮换
 func (p *FROSTProtocol) RotateKey(ctx context.Context, keyID string) error {
 	return errors.New("FROST key rotation not yet implemented")
+}
+
+// ProcessIncomingKeygenMessage 处理接收到的DKG消息
+func (p *FROSTProtocol) ProcessIncomingKeygenMessage(
+	ctx context.Context,
+	sessionID string,
+	fromNodeID string,
+	msgBytes []byte,
+	isBroadcast bool,
+) error {
+	return p.partyManager.ProcessIncomingKeygenMessage(ctx, sessionID, fromNodeID, msgBytes, isBroadcast)
+}
+
+// ProcessIncomingSigningMessage 处理接收到的签名消息
+func (p *FROSTProtocol) ProcessIncomingSigningMessage(
+	ctx context.Context,
+	sessionID string,
+	fromNodeID string,
+	msgBytes []byte,
+) error {
+	return p.partyManager.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, msgBytes)
 }
 
 // verifySchnorrSignature 验证 Schnorr 签名
