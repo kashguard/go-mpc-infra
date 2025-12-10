@@ -39,6 +39,9 @@ type GRPCServer struct {
 
 	// 用于确保每个DKG会话只启动一次
 	dkgStartOnce sync.Map // map[string]*sync.Once
+
+	// 用于确保每个签名会话只启动一次
+	signStartOnce sync.Map // map[string]*sync.Once
 }
 
 // ServerConfig gRPC服务端配置
@@ -453,7 +456,7 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 					}
 
 					dkgReq := &protocol.KeyGenRequest{
-						KeyID:      sess.KeyID,  // DKG会话使用keyID作为sessionID
+						KeyID:      sess.KeyID, // DKG会话使用keyID作为sessionID
 						Algorithm:  algorithm,
 						Curve:      curve,
 						Threshold:  sess.Threshold,

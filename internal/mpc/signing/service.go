@@ -3,6 +3,7 @@ package signing
 import (
 	"context"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,15 +11,24 @@ import (
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/node"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
+	pb "github.com/kashguard/go-mpc-wallet/internal/pb/mpc/v1"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
+
+// GRPCClient gRPC客户端接口（用于调用participant节点）
+type GRPCClient interface {
+	SendStartSign(ctx context.Context, nodeID string, req *pb.StartSignRequest) (*pb.StartSignResponse, error)
+}
 
 // Service 签名服务
 type Service struct {
-	keyService     *key.Service
-	protocolEngine protocol.Engine
-	sessionManager *session.Manager
-	nodeDiscovery  *node.Discovery
+	keyService      *key.Service
+	protocolEngine  protocol.Engine
+	sessionManager  *session.Manager
+	nodeDiscovery   *node.Discovery
+	defaultProtocol string     // 默认协议（从配置中获取）
+	grpcClient      GRPCClient // gRPC客户端，用于调用participant节点
 }
 
 // NewService 创建签名服务
@@ -27,13 +37,49 @@ func NewService(
 	protocolEngine protocol.Engine,
 	sessionManager *session.Manager,
 	nodeDiscovery *node.Discovery,
+	defaultProtocol string,
+	grpcClient GRPCClient,
 ) *Service {
 	return &Service{
-		keyService:     keyService,
-		protocolEngine: protocolEngine,
-		sessionManager: sessionManager,
-		nodeDiscovery:  nodeDiscovery,
+		keyService:      keyService,
+		protocolEngine:  protocolEngine,
+		sessionManager:  sessionManager,
+		nodeDiscovery:   nodeDiscovery,
+		defaultProtocol: defaultProtocol,
+		grpcClient:      grpcClient,
 	}
+}
+
+// inferProtocol 根据密钥的 Algorithm 和 Curve 推断协议类型
+// 返回协议名称（gg18, gg20, frost）
+func inferProtocol(algorithm, curve, defaultProtocol string) string {
+	algorithmLower := strings.ToLower(algorithm)
+	curveLower := strings.ToLower(curve)
+
+	// FROST 协议：EdDSA 或 Schnorr + Ed25519 或 secp256k1
+	if algorithmLower == "eddsa" || algorithmLower == "schnorr" {
+		if curveLower == "ed25519" || curveLower == "secp256k1" {
+			return "frost"
+		}
+	}
+
+	// ECDSA + secp256k1：使用默认协议（gg18 或 gg20）
+	if algorithmLower == "ecdsa" && curveLower == "secp256k1" {
+		// 如果默认协议是 gg18 或 gg20，使用默认协议
+		if defaultProtocol == "gg18" || defaultProtocol == "gg20" {
+			return defaultProtocol
+		}
+		// 否则默认使用 gg20
+		return "gg20"
+	}
+
+	// 默认使用配置的默认协议
+	if defaultProtocol != "" {
+		return defaultProtocol
+	}
+
+	// 最后默认使用 gg20
+	return "gg20"
 }
 
 // ThresholdSign 阈值签名
@@ -44,13 +90,16 @@ func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignRes
 		return nil, errors.Wrap(err, "failed to get key")
 	}
 
-	// 2. 创建签名会话
-	signingSession, err := s.sessionManager.CreateSession(ctx, req.KeyID, "gg20", keyMetadata.Threshold, keyMetadata.TotalNodes)
+	// 2. 推断协议类型
+	protocolName := inferProtocol(keyMetadata.Algorithm, keyMetadata.Curve, s.defaultProtocol)
+
+	// 3. 创建签名会话
+	signingSession, err := s.sessionManager.CreateSession(ctx, req.KeyID, protocolName, keyMetadata.Threshold, keyMetadata.TotalNodes)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create signing session")
 	}
 
-	// 3. 选择参与节点（达到阈值即可）
+	// 4. 选择参与节点（达到阈值即可）
 	participants, err := s.nodeDiscovery.DiscoverNodes(ctx, node.NodeTypeParticipant, node.NodeStatusActive, keyMetadata.Threshold)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to discover participants")
@@ -72,7 +121,7 @@ func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignRes
 		return nil, errors.Wrap(err, "failed to update session with participating nodes")
 	}
 
-	// 4. 准备消息
+	// 5. 准备消息
 	var message []byte
 	if req.MessageHex != "" {
 		var err error
@@ -84,40 +133,134 @@ func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignRes
 		message = req.Message
 	}
 
-	// 5. 准备签名请求
-	signReq := &protocol.SignRequest{
-		KeyID:      req.KeyID,
-		Message:    message,
-		MessageHex: hex.EncodeToString(message),
-		NodeIDs:    participatingNodes,
+	// 6. 通过 gRPC 调用 participant 节点执行签名
+	// Coordinator 不直接执行签名，而是通知 participant 节点执行
+	// 选择第一个 participant 节点作为 leader（类似 DKG 流程）
+	if len(participatingNodes) == 0 {
+		return nil, errors.New("no participating nodes available")
 	}
 
-	// 6. 执行签名协议
-	signResp, err := s.protocolEngine.ThresholdSign(ctx, signingSession.SessionID, signReq)
+	leaderNodeID := participatingNodes[0]
+
+	// 准备 StartSign 请求
+	startSignReq := &pb.StartSignRequest{
+		SessionId:  signingSession.SessionID,
+		KeyId:      req.KeyID,
+		Message:    message,
+		MessageHex: hex.EncodeToString(message),
+		Protocol:   protocolName,
+		Threshold:  int32(keyMetadata.Threshold),
+		TotalNodes: int32(keyMetadata.TotalNodes),
+		NodeIds:    participatingNodes,
+	}
+
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("session_id", signingSession.SessionID).
+		Str("leader_node_id", leaderNodeID).
+		Str("protocol", protocolName).
+		Int("participating_nodes_count", len(participatingNodes)).
+		Msg("Calling StartSign RPC on leader participant node")
+
+	// 调用 leader participant 节点的 StartSign RPC
+	// 注意：签名协议会在 participant 节点间执行，coordinator 只负责协调
+	startSignCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startResp, err := s.grpcClient.SendStartSign(startSignCtx, leaderNodeID, startSignReq)
 	if err != nil {
 		// 标记会话为失败
 		signingSession.Status = "failed"
 		s.sessionManager.UpdateSession(ctx, signingSession)
-		return nil, errors.Wrap(err, "failed to execute threshold signing")
+		return nil, errors.Wrap(err, "failed to call StartSign on leader participant")
 	}
 
-	// 7. 验证签名
+	if !startResp.Started {
+		// 标记会话为失败
+		signingSession.Status = "failed"
+		s.sessionManager.UpdateSession(ctx, signingSession)
+		return nil, errors.Errorf("StartSign failed: %s", startResp.Message)
+	}
+
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("session_id", signingSession.SessionID).
+		Str("leader_node_id", leaderNodeID).
+		Msg("StartSign RPC succeeded, waiting for signature completion")
+
+	// 7. 等待签名完成（轮询会话状态）
+	// 签名完成后，会话的 Signature 字段会被更新
+	maxWaitTime := 5 * time.Minute
+	pollInterval := 2 * time.Second
+	deadline := time.Now().Add(maxWaitTime)
+
+	var signatureHex string
+	for time.Now().Before(deadline) {
+		// 获取最新的会话状态
+		updatedSession, err := s.sessionManager.GetSession(ctx, signingSession.SessionID)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get session status")
+		}
+
+		// 检查签名是否完成
+		if updatedSession.Status == "completed" && updatedSession.Signature != "" {
+			signatureHex = updatedSession.Signature
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("session_id", signingSession.SessionID).
+				Str("signature", signatureHex).
+				Msg("Signature completed successfully")
+			break
+		}
+
+		// 检查是否失败
+		if updatedSession.Status == "failed" {
+			return nil, errors.New("signing session failed")
+		}
+
+		// 等待一段时间后再次检查
+		time.Sleep(pollInterval)
+	}
+
+	if signatureHex == "" {
+		// 超时
+		signingSession.Status = "failed"
+		s.sessionManager.UpdateSession(ctx, signingSession)
+		return nil, errors.New("signing timeout")
+	}
+
+	// 8. 验证签名（可选，但建议验证）
+	pubKeyBytes, err := hex.DecodeString(keyMetadata.PublicKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode public key hex")
+	}
+
 	pubKey := &protocol.PublicKey{
 		Hex:   keyMetadata.PublicKey,
-		Bytes: []byte(keyMetadata.PublicKey), // 需要从hex解码
+		Bytes: pubKeyBytes,
 	}
-	valid, err := s.protocolEngine.VerifySignature(ctx, signResp.Signature, message, pubKey)
+
+	sigBytes, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode signature hex")
+	}
+
+	signature := &protocol.Signature{
+		Bytes: sigBytes,
+		Hex:   signatureHex,
+	}
+
+	if len(sigBytes) >= 64 {
+		signature.R = sigBytes[:32]
+		signature.S = sigBytes[32:64]
+	}
+
+	valid, err := s.protocolEngine.VerifySignature(ctx, signature, message, pubKey)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to verify signature")
 	}
 	if !valid {
 		return nil, errors.New("signature verification failed")
-	}
-
-	// 8. 完成会话
-	signatureHex := signResp.Signature.Hex
-	if err := s.sessionManager.CompleteSession(ctx, signingSession.SessionID, signatureHex); err != nil {
-		return nil, errors.Wrap(err, "failed to complete session")
 	}
 
 	// 9. 构建响应

@@ -208,6 +208,48 @@ func (c *GRPCClient) SendStartDKG(ctx context.Context, nodeID string, req *pb.St
 	return resp, nil
 }
 
+// SendStartSign 调用参与者的 StartSign RPC
+func (c *GRPCClient) SendStartSign(ctx context.Context, nodeID string, req *pb.StartSignRequest) (*pb.StartSignResponse, error) {
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Msg("Sending StartSign RPC to participant")
+
+	client, err := c.getOrCreateConnection(ctx, nodeID)
+	if err != nil {
+		log.Error().Err(err).Str("node_id", nodeID).Msg("Failed to get gRPC connection")
+		return nil, errors.Wrapf(err, "failed to get connection to node %s", nodeID)
+	}
+
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Msg("Calling StartSign RPC")
+
+	resp, err := client.StartSign(ctx, req)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("node_id", nodeID).
+			Str("key_id", req.KeyId).
+			Str("session_id", req.SessionId).
+			Msg("StartSign RPC call failed")
+		return nil, err
+	}
+
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Bool("started", resp.Started).
+		Str("message", resp.Message).
+		Msg("StartSign RPC call succeeded")
+
+	return resp, nil
+}
+
 // SendSigningMessage 发送签名协议消息到目标节点
 func (c *GRPCClient) SendSigningMessage(ctx context.Context, nodeID string, msg tss.Message, sessionID string) error {
 	// 防止节点向自己发送消息

@@ -106,6 +106,13 @@ type KeyShareStorage interface {
 
 	// 列出所有密钥分片
 	ListKeyShares(ctx context.Context, nodeID string) ([]string, error)
+
+	// 存储密钥数据（LocalPartySaveData 序列化后的数据，加密存储）
+	// 用于签名时重建 LocalPartySaveData
+	StoreKeyData(ctx context.Context, keyID string, nodeID string, keyData []byte) error
+
+	// 获取密钥数据（解密并返回序列化的 LocalPartySaveData）
+	GetKeyData(ctx context.Context, keyID string, nodeID string) ([]byte, error)
 }
 
 // SessionStore 签名会话存储接口（Redis）

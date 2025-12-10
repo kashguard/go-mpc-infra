@@ -58,7 +58,7 @@ func InitNewServer(server config.Server) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	engine := NewProtocolEngine(server, grpcClient)
+	engine := NewProtocolEngine(server, grpcClient, keyShareStorage)
 	discoveryService, err := NewMPCDiscoveryService(server)
 	if err != nil {
 		return nil, err
@@ -72,11 +72,11 @@ func InitNewServer(server config.Server) (*Server, error) {
 	}
 	sessionStore := NewSessionStore(client)
 	sessionManager := NewSessionManager(metadataStore, sessionStore, server)
-	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery)
+	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery, server, grpcClient)
 	coordinatorService := NewCoordinatorServiceProvider(server, keyService, sessionManager, discovery, engine, grpcClient)
 	participantService := NewParticipantServiceProvider(server, keyShareStorage, engine)
 	registry := NewNodeRegistry(manager)
-	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager)
+	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 	if err != nil {
 		return nil, err
 	}
-	engine := NewProtocolEngine(server, grpcClient)
+	engine := NewProtocolEngine(server, grpcClient, keyShareStorage)
 	discoveryService, err := NewMPCDiscoveryService(server)
 	if err != nil {
 		return nil, err
@@ -130,11 +130,11 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 	}
 	sessionStore := NewSessionStore(client)
 	sessionManager := NewSessionManager(metadataStore, sessionStore, server)
-	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery)
+	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery, server, grpcClient)
 	coordinatorService := NewCoordinatorServiceProvider(server, keyService, sessionManager, discovery, engine, grpcClient)
 	participantService := NewParticipantServiceProvider(server, keyShareStorage, engine)
 	registry := NewNodeRegistry(manager)
-	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager)
+	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage)
 	if err != nil {
 		return nil, err
 	}

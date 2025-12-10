@@ -1,8 +1,10 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/kashguard/tss-lib/ecdsa/keygen"
 	"github.com/kashguard/tss-lib/tss"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
 
 // gg18KeyRecord 保存密钥生成后的内部状态（使用 tss-lib 的真实数据）
@@ -24,6 +27,12 @@ type gg18KeyRecord struct {
 	Threshold  int
 	TotalNodes int
 	NodeIDs    []string
+}
+
+// KeyShareStorage 密钥分片存储接口（用于持久化 LocalPartySaveData）
+type KeyShareStorage interface {
+	StoreKeyData(ctx context.Context, keyID string, nodeID string, keyData []byte) error
+	GetKeyData(ctx context.Context, keyID string, nodeID string) ([]byte, error)
 }
 
 // GG18Protocol GG18协议实现（基于 tss-lib 的生产级实现）
@@ -42,17 +51,21 @@ type GG18Protocol struct {
 	// 消息路由函数（用于节点间通信）
 	// 参数：sessionID（用于DKG或签名会话），nodeID（目标节点），msg（tss-lib消息），isBroadcast（是否广播）
 	messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error
+
+	// 密钥数据存储（用于持久化 LocalPartySaveData）
+	keyShareStorage KeyShareStorage
 }
 
 // NewGG18Protocol 创建GG18协议实例（生产级实现，基于 tss-lib）
-func NewGG18Protocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error) *GG18Protocol {
+func NewGG18Protocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error, keyShareStorage KeyShareStorage) *GG18Protocol {
 	partyManager := newTSSPartyManager(messageRouter)
 	return &GG18Protocol{
-		curve:         curve,
-		keyRecords:    make(map[string]*gg18KeyRecord),
-		partyManager:  partyManager,
-		thisNodeID:    thisNodeID,
-		messageRouter: messageRouter,
+		curve:           curve,
+		keyRecords:      make(map[string]*gg18KeyRecord),
+		partyManager:    partyManager,
+		thisNodeID:      thisNodeID,
+		messageRouter:   messageRouter,
+		keyShareStorage: keyShareStorage,
 	}
 }
 
@@ -109,6 +122,36 @@ func (p *GG18Protocol) GenerateKeyShare(ctx context.Context, req *KeyGenRequest)
 	}
 	p.saveKeyRecord(keyID, record)
 
+	// 持久化 LocalPartySaveData 到 keyShareStorage（用于签名时加载）
+	if p.keyShareStorage != nil {
+		keyDataBytes, err := serializeLocalPartySaveData(keyData)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to serialize LocalPartySaveData")
+		}
+		log.Info().
+			Str("key_id", keyID).
+			Str("node_id", p.thisNodeID).
+			Int("key_data_bytes", len(keyDataBytes)).
+			Msg("Storing LocalPartySaveData to keyShareStorage")
+		if err := p.keyShareStorage.StoreKeyData(ctx, keyID, p.thisNodeID, keyDataBytes); err != nil {
+			log.Error().
+				Err(err).
+				Str("key_id", keyID).
+				Str("node_id", p.thisNodeID).
+				Msg("Failed to store LocalPartySaveData")
+			return nil, errors.Wrap(err, "failed to store LocalPartySaveData")
+		}
+		log.Info().
+			Str("key_id", keyID).
+			Str("node_id", p.thisNodeID).
+			Msg("LocalPartySaveData stored successfully")
+	} else {
+		log.Warn().
+			Str("key_id", keyID).
+			Str("node_id", p.thisNodeID).
+			Msg("keyShareStorage is nil, cannot store LocalPartySaveData")
+	}
+
 	// 返回当前节点的KeyShare（在map中）
 	keyShares := make(map[string]*KeyShare)
 	keyShares[p.thisNodeID] = keyShare
@@ -125,10 +168,63 @@ func (p *GG18Protocol) ThresholdSign(ctx context.Context, sessionID string, req 
 		return nil, errors.Wrap(err, "invalid sign request")
 	}
 
-	// 获取密钥记录
+	// 获取密钥记录（优先从内存，如果不存在则从 keyShareStorage 加载）
 	record, ok := p.getKeyRecord(req.KeyID)
 	if !ok {
-		return nil, errors.Errorf("key %s not found", req.KeyID)
+		// 内存中没有，尝试从 keyShareStorage 加载
+		if p.keyShareStorage != nil {
+			keyDataBytes, err := p.keyShareStorage.GetKeyData(ctx, req.KeyID, p.thisNodeID)
+			if err != nil {
+				return nil, errors.Wrapf(err, "key %s not found in memory or storage", req.KeyID)
+			}
+
+			// 反序列化 LocalPartySaveData
+			keyData, err := deserializeLocalPartySaveData(keyDataBytes)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to deserialize LocalPartySaveData")
+			}
+
+			// 从密钥元数据获取公钥（需要从 keyService 获取，但这里我们没有 keyService）
+			// 暂时从 keyData 中提取公钥
+			ecdsaPubKey := keyData.ECDSAPub.ToECDSAPubKey()
+			if ecdsaPubKey == nil {
+				return nil, errors.New("failed to extract public key from LocalPartySaveData")
+			}
+
+			var pubKeyBytes []byte
+			if ecdsaPubKey.Y.Bit(0) == 0 {
+				pubKeyBytes = append([]byte{0x02}, ecdsaPubKey.X.Bytes()...)
+			} else {
+				pubKeyBytes = append([]byte{0x03}, ecdsaPubKey.X.Bytes()...)
+			}
+			if len(ecdsaPubKey.X.Bytes()) < 32 {
+				padded := make([]byte, 32)
+				copy(padded[32-len(ecdsaPubKey.X.Bytes()):], ecdsaPubKey.X.Bytes())
+				if ecdsaPubKey.Y.Bit(0) == 0 {
+					pubKeyBytes = append([]byte{0x02}, padded...)
+				} else {
+					pubKeyBytes = append([]byte{0x03}, padded...)
+				}
+			}
+			pubKeyHex := hex.EncodeToString(pubKeyBytes)
+
+			publicKey := &PublicKey{
+				Bytes: pubKeyBytes,
+				Hex:   pubKeyHex,
+			}
+
+			// 创建密钥记录并保存到内存
+			record = &gg18KeyRecord{
+				KeyData:    keyData,
+				PublicKey:  publicKey,
+				Threshold:  0, // 这些信息需要从密钥元数据获取，暂时使用默认值
+				TotalNodes: 0,
+				NodeIDs:    nil,
+			}
+			p.saveKeyRecord(req.KeyID, record)
+		} else {
+			return nil, errors.Errorf("key %s not found", req.KeyID)
+		}
 	}
 
 	if record.KeyData == nil {
@@ -309,4 +405,35 @@ func (p *GG18Protocol) ValidateSignRequest(req *SignRequest) error {
 	}
 
 	return nil
+}
+
+// serializeLocalPartySaveData 序列化 LocalPartySaveData 为字节
+// 使用 encoding/gob 进行序列化，因为 LocalPartySaveData 包含 big.Int 等复杂类型
+func serializeLocalPartySaveData(keyData *keygen.LocalPartySaveData) ([]byte, error) {
+	if keyData == nil {
+		return nil, errors.New("keyData is nil")
+	}
+
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+	if err := encoder.Encode(keyData); err != nil {
+		return nil, errors.Wrap(err, "failed to encode LocalPartySaveData")
+	}
+
+	return buf.Bytes(), nil
+}
+
+// deserializeLocalPartySaveData 从字节反序列化 LocalPartySaveData
+func deserializeLocalPartySaveData(data []byte) (*keygen.LocalPartySaveData, error) {
+	if len(data) == 0 {
+		return nil, errors.New("data is empty")
+	}
+
+	var keyData keygen.LocalPartySaveData
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&keyData); err != nil {
+		return nil, errors.Wrap(err, "failed to decode LocalPartySaveData")
+	}
+
+	return &keyData, nil
 }

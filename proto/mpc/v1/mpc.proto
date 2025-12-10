@@ -12,6 +12,9 @@ service MPCNode {
   // 启动 DKG（由协调者调用参与者）
   rpc StartDKG(StartDKGRequest) returns (StartDKGResponse);
 
+  // 启动签名（由协调者调用参与者）
+  rpc StartSign(StartSignRequest) returns (StartSignResponse);
+
   // 提交签名分片
   rpc SubmitSignatureShare(ShareRequest) returns (ShareResponse);
 
@@ -94,6 +97,23 @@ message StartDKGRequest {
 }
 
 message StartDKGResponse {
+  bool started = 1;
+  string message = 2;
+}
+
+// 启动签名 请求/响应
+message StartSignRequest {
+  string session_id = 1; // 签名会话ID
+  string key_id = 2;
+  bytes message = 3;     // 要签名的消息
+  string message_hex = 4; // 消息的hex编码（可选）
+  string protocol = 5;   // "gg18", "gg20", "frost"
+  int32 threshold = 6;
+  int32 total_nodes = 7;
+  repeated string node_ids = 8; // 参与节点列表
+}
+
+message StartSignResponse {
   bool started = 1;
   string message = 2;
 }

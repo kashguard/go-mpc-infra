@@ -17,9 +17,9 @@ type GG20Protocol struct {
 }
 
 // NewGG20Protocol 创建GG20协议实例
-func NewGG20Protocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error) *GG20Protocol {
+func NewGG20Protocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error, keyShareStorage KeyShareStorage) *GG20Protocol {
 	return &GG20Protocol{
-		GG18Protocol: NewGG18Protocol(curve, thisNodeID, messageRouter),
+		GG18Protocol: NewGG18Protocol(curve, thisNodeID, messageRouter, keyShareStorage),
 	}
 }
 

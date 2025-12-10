@@ -205,6 +205,58 @@ func (s *FileSystemKeyShareStorage) ListKeyShares(ctx context.Context, nodeID st
 	return keyIDs, nil
 }
 
+// StoreKeyData 存储密钥数据（LocalPartySaveData 序列化后的数据，加密存储）
+func (s *FileSystemKeyShareStorage) StoreKeyData(ctx context.Context, keyID string, nodeID string, keyData []byte) error {
+	// 加密数据
+	encrypted, err := s.encrypt(keyData)
+	if err != nil {
+		return errors.Wrap(err, "failed to encrypt key data")
+	}
+
+	// 获取文件路径（使用 .keydata 扩展名以区分密钥分片）
+	filePath := filepath.Join(s.basePath, keyID, nodeID+".keydata.enc")
+	dirPath := filepath.Dir(filePath)
+
+	// 创建目录
+	if err := os.MkdirAll(dirPath, 0700); err != nil {
+		return errors.Wrap(err, "failed to create directory")
+	}
+
+	// 写入文件（使用临时文件然后原子重命名）
+	tmpPath := filePath + ".tmp"
+	if err := os.WriteFile(tmpPath, encrypted, 0600); err != nil {
+		return errors.Wrap(err, "failed to write encrypted key data")
+	}
+
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return errors.Wrap(err, "failed to rename temp file")
+	}
+
+	return nil
+}
+
+// GetKeyData 获取密钥数据（解密并返回序列化的 LocalPartySaveData）
+func (s *FileSystemKeyShareStorage) GetKeyData(ctx context.Context, keyID string, nodeID string) ([]byte, error) {
+	filePath := filepath.Join(s.basePath, keyID, nodeID+".keydata.enc")
+
+	// 读取加密文件
+	encrypted, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.New("key data not found")
+		}
+		return nil, errors.Wrap(err, "failed to read encrypted key data")
+	}
+
+	// 解密数据
+	keyData, err := s.decrypt(encrypted)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decrypt key data")
+	}
+
+	return keyData, nil
+}
+
 // ValidateKeyShare 验证密钥分片格式（辅助函数）
 func ValidateKeyShare(share []byte) error {
 	// 基本验证：检查长度和格式

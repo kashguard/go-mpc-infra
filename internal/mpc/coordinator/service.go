@@ -28,6 +28,8 @@ type Service struct {
 type GRPCClient interface {
 	// StartDKG RPC
 	SendStartDKG(ctx context.Context, nodeID string, req *pb.StartDKGRequest) (*pb.StartDKGResponse, error)
+	// StartSign RPC
+	SendStartSign(ctx context.Context, nodeID string, req *pb.StartSignRequest) (*pb.StartSignResponse, error)
 }
 
 // NewService 创建Coordinator服务

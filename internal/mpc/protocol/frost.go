@@ -38,6 +38,9 @@ type FROSTProtocol struct {
 	// 消息路由函数（用于节点间通信）
 	// 参数：sessionID（用于DKG或签名会话），nodeID（目标节点），msg（tss-lib消息），isBroadcast（是否广播）
 	messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error
+
+	// 密钥数据存储（用于持久化 LocalPartySaveData）
+	keyShareStorage KeyShareStorage
 }
 
 // frostKeyRecord 保存 FROST 密钥生成后的内部状态
@@ -51,14 +54,15 @@ type frostKeyRecord struct {
 }
 
 // NewFROSTProtocol 创建 FROST 协议实例
-func NewFROSTProtocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error) *FROSTProtocol {
+func NewFROSTProtocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error, keyShareStorage KeyShareStorage) *FROSTProtocol {
 	partyManager := newTSSPartyManager(messageRouter)
 	return &FROSTProtocol{
-		curve:         curve,
-		keyRecords:    make(map[string]*frostKeyRecord),
-		partyManager:  partyManager,
-		thisNodeID:    thisNodeID,
-		messageRouter: messageRouter,
+		curve:          curve,
+		keyRecords:      make(map[string]*frostKeyRecord),
+		partyManager:   partyManager,
+		thisNodeID:     thisNodeID,
+		messageRouter:  messageRouter,
+		keyShareStorage: keyShareStorage,
 	}
 }
 

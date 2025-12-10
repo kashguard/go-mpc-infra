@@ -138,15 +138,16 @@ func NewMPCGRPCServer(
 	cfg config.Server,
 	protocolEngine protocol.Engine,
 	sessionManager *session.Manager,
+	keyShareStorage storage.KeyShareStorage,
 ) (*mpcgrpc.GRPCServer, error) {
 	nodeID := cfg.MPC.NodeID
 	if nodeID == "" {
 		nodeID = "default-node"
 	}
-	return mpcgrpc.NewGRPCServer(cfg, protocolEngine, sessionManager, nodeID), nil
+	return mpcgrpc.NewGRPCServer(cfg, protocolEngine, sessionManager, keyShareStorage, nodeID), nil
 }
 
-func NewProtocolEngine(cfg config.Server, grpcClient *mpcgrpc.GRPCClient) protocol.Engine {
+func NewProtocolEngine(cfg config.Server, grpcClient *mpcgrpc.GRPCClient, keyShareStorage storage.KeyShareStorage) protocol.Engine {
 	curve := "secp256k1"
 	thisNodeID := cfg.MPC.NodeID
 	if thisNodeID == "" {
@@ -182,11 +183,23 @@ func NewProtocolEngine(cfg config.Server, grpcClient *mpcgrpc.GRPCClient) protoc
 		}
 	}
 
-	if len(cfg.MPC.SupportedProtocols) > 0 {
-		// future: switch based on protocol type
+	// 根据配置选择协议
+	defaultProtocol := cfg.MPC.DefaultProtocol
+	if defaultProtocol == "" {
+		defaultProtocol = "gg20"
 	}
 
-	return protocol.NewGG20Protocol(curve, thisNodeID, messageRouter)
+	switch defaultProtocol {
+	case "gg18":
+		return protocol.NewGG18Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	case "gg20":
+		return protocol.NewGG20Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	case "frost":
+		return protocol.NewFROSTProtocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	default:
+		// 默认使用GG20
+		return protocol.NewGG20Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	}
 }
 
 func NewNodeManager(metadataStore storage.MetadataStore, cfg config.Server) *node.Manager {
@@ -245,8 +258,12 @@ func NewKeyServiceProvider(
 	return key.NewService(metadataStore, keyShareStorage, protocolEngine, dkgService)
 }
 
-func NewSigningServiceProvider(keyService *key.Service, protocolEngine protocol.Engine, sessionManager *session.Manager, nodeDiscovery *node.Discovery) *signing.Service {
-	return signing.NewService(keyService, protocolEngine, sessionManager, nodeDiscovery)
+func NewSigningServiceProvider(keyService *key.Service, protocolEngine protocol.Engine, sessionManager *session.Manager, nodeDiscovery *node.Discovery, cfg config.Server, grpcClient *mpcgrpc.GRPCClient) *signing.Service {
+	defaultProtocol := cfg.MPC.DefaultProtocol
+	if defaultProtocol == "" {
+		defaultProtocol = "gg20"
+	}
+	return signing.NewService(keyService, protocolEngine, sessionManager, nodeDiscovery, defaultProtocol, grpcClient)
 }
 
 func NewCoordinatorServiceProvider(
