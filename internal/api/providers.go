@@ -17,7 +17,6 @@ import (
 	mpcgrpc "github.com/kashguard/go-mpc-wallet/internal/mpc/grpc"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/key"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/node"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/participant"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/signing"
@@ -139,12 +138,41 @@ func NewMPCGRPCServer(
 	protocolEngine protocol.Engine,
 	sessionManager *session.Manager,
 	keyShareStorage storage.KeyShareStorage,
+	grpcClient *mpcgrpc.GRPCClient,
 ) (*mpcgrpc.GRPCServer, error) {
 	nodeID := cfg.MPC.NodeID
 	if nodeID == "" {
 		nodeID = "default-node"
 	}
-	return mpcgrpc.NewGRPCServer(cfg, protocolEngine, sessionManager, keyShareStorage, nodeID), nil
+
+	// 创建协议注册表，注册所有支持的协议引擎
+	// 这样 participant 节点可以根据请求中的 Protocol 字段动态选择协议引擎
+	registry := protocol.NewProtocolRegistry()
+	curve := "secp256k1"
+	thisNodeID := nodeID
+
+	// 创建消息路由器（与 NewProtocolEngine 中的逻辑相同）
+	messageRouter := func(sessionID string, targetNodeID string, msg tss.Message, isBroadcast bool) error {
+		ctx := context.Background()
+		if len(sessionID) > 0 && sessionID[:4] == "key-" {
+			// DKG消息
+			return grpcClient.SendKeygenMessage(ctx, targetNodeID, msg, sessionID, isBroadcast)
+		} else {
+			// 签名消息
+			return grpcClient.SendSigningMessage(ctx, targetNodeID, msg, sessionID)
+		}
+	}
+
+	// 注册所有支持的协议引擎
+	gg18Engine := protocol.NewGG18Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	gg20Engine := protocol.NewGG20Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	frostEngine := protocol.NewFROSTProtocol(curve, thisNodeID, messageRouter, keyShareStorage)
+
+	registry.Register("gg18", gg18Engine)
+	registry.Register("gg20", gg20Engine)
+	registry.Register("frost", frostEngine)
+
+	return mpcgrpc.NewGRPCServerWithRegistry(cfg, protocolEngine, registry, sessionManager, keyShareStorage, nodeID), nil
 }
 
 func NewProtocolEngine(cfg config.Server, grpcClient *mpcgrpc.GRPCClient, keyShareStorage storage.KeyShareStorage) protocol.Engine {
@@ -245,8 +273,39 @@ func NewDKGServiceProvider(
 	protocolEngine protocol.Engine,
 	nodeManager *node.Manager,
 	nodeDiscovery *node.Discovery,
+	grpcClient *mpcgrpc.GRPCClient, // 新增：需要gRPC客户端来创建协议引擎
+	cfg config.Server, // 新增：需要配置来获取节点ID
 ) *key.DKGService {
-	return key.NewDKGService(metadataStore, keyShareStorage, protocolEngine, nodeManager, nodeDiscovery)
+	// 创建协议注册表，用于DKG服务根据算法和曲线选择正确的协议
+	registry := protocol.NewProtocolRegistry()
+	curve := "secp256k1"
+	thisNodeID := cfg.MPC.NodeID
+	if thisNodeID == "" {
+		thisNodeID = "default-node"
+	}
+
+	// 创建消息路由器（与 NewProtocolEngine 和 NewMPCGRPCServer 中的逻辑相同）
+	messageRouter := func(sessionID string, targetNodeID string, msg tss.Message, isBroadcast bool) error {
+		ctx := context.Background()
+		if len(sessionID) > 0 && sessionID[:4] == "key-" {
+			// DKG消息
+			return grpcClient.SendKeygenMessage(ctx, targetNodeID, msg, sessionID, isBroadcast)
+		} else {
+			// 签名消息
+			return grpcClient.SendSigningMessage(ctx, targetNodeID, msg, sessionID)
+		}
+	}
+
+	// 注册所有支持的协议引擎
+	gg18Engine := protocol.NewGG18Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	gg20Engine := protocol.NewGG20Protocol(curve, thisNodeID, messageRouter, keyShareStorage)
+	frostEngine := protocol.NewFROSTProtocol(curve, thisNodeID, messageRouter, keyShareStorage)
+
+	registry.Register("gg18", gg18Engine)
+	registry.Register("gg20", gg20Engine)
+	registry.Register("frost", frostEngine)
+
+	return key.NewDKGService(metadataStore, keyShareStorage, protocolEngine, registry, nodeManager, nodeDiscovery)
 }
 
 func NewKeyServiceProvider(
@@ -284,10 +343,6 @@ func NewCoordinatorServiceProvider(
 		Msg("NewCoordinatorServiceProvider: creating coordinator service with NodeID")
 
 	return coordinator.NewService(keyService, sessionManager, nodeDiscovery, protocolEngine, grpcClient, nodeID)
-}
-
-func NewParticipantServiceProvider(cfg config.Server, keyShareStorage storage.KeyShareStorage, protocolEngine protocol.Engine) *participant.Service {
-	return participant.NewService(cfg.MPC.NodeID, keyShareStorage, protocolEngine)
 }
 
 // ✅ 删除旧的 internal/grpc 相关 providers（已废弃，已统一到 internal/mpc/grpc）

@@ -184,11 +184,11 @@ func TestExecuteEdDSASigning_ContextCancellation(t *testing.T) {
 	// 我们需要确保 KeyData 中的 ShareID 与 setupPartyIDs 生成的 ID 匹配
 	// setupPartyIDs 使用 sha256(nodeID) 作为 uniqueKey
 	keyData := eddsaKeygen.NewLocalPartySaveData(2)
-	
+
 	// 计算 node-1 的 hash (uniqueKey)
 	hash := sha256.Sum256([]byte("node-1"))
 	uniqueKey := new(big.Int).SetBytes(hash[:])
-	
+
 	keyData.ShareID = uniqueKey // 设置当前节点的 ShareID
 	keyData.Ks = []*big.Int{
 		uniqueKey,

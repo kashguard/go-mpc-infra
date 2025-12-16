@@ -285,9 +285,9 @@ func TestConvertFROSTKeyData(t *testing.T) {
 			errMsg:    "saveData is nil", // 修正：expect "saveData is nil" instead of "EDDSAPub is nil"
 		},
 		{
-			name:      "empty node IDs",
-			keyID:     "test-key",
-			saveData:  &eddsaKeygen.LocalPartySaveData{
+			name:  "empty node IDs",
+			keyID: "test-key",
+			saveData: &eddsaKeygen.LocalPartySaveData{
 				EDDSAPub: &eddsaKeygen.EDDSAPubKey{}, // Provide dummy EDDSAPub to avoid nil check error
 			},
 			nodeIDs:   []string{},
@@ -432,7 +432,8 @@ func TestVerifySchnorrSignature(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := verifySchnorrSignature(tt.sig, tt.msg, tt.pubKey)
+			// 使用默认曲线 ed25519 进行测试
+			result, err := verifySchnorrSignature(tt.sig, tt.msg, tt.pubKey, "ed25519")
 			if tt.wantError {
 				require.Error(t, err)
 				if tt.errMsg != "" {
@@ -440,8 +441,7 @@ func TestVerifySchnorrSignature(t *testing.T) {
 				}
 				assert.False(t, result)
 			} else {
-				// 注意：verifySchnorrSignature 目前使用 verifyECDSASignature，
-				// 所以对于有效的 Schnorr 签名可能验证失败
+				// 注意：verifySchnorrSignature 现在根据曲线类型选择验证方法
 				// 这里只测试错误处理
 			}
 		})
@@ -561,8 +561,7 @@ func TestFROSTProtocol_VerifySignature(t *testing.T) {
 				}
 				assert.False(t, result)
 			} else {
-				// 注意：verifySchnorrSignature 目前使用 verifyECDSASignature，
-				// 所以对于有效的 Schnorr 签名可能验证失败
+				// 注意：verifySchnorrSignature 现在根据曲线类型选择验证方法
 				// 这里只测试错误处理
 			}
 		})

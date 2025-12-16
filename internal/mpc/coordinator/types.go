@@ -28,14 +28,6 @@ type SigningSession struct {
 	ExpiresAt          time.Time
 }
 
-// Signature 签名
-type Signature struct {
-	R     []byte
-	S     []byte
-	Bytes []byte
-	Hex   string
-}
-
 // CreateDKGSessionRequest 创建DKG会话请求
 type CreateDKGSessionRequest struct {
 	KeyID      string

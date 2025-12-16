@@ -124,6 +124,15 @@ type MPC struct {
 	GRPCPort   int
 	TLSEnabled bool
 
+	// TLS 配置（mTLS 用于基础设施层与应用层通信）
+	TLSCertFile   string // 服务器证书文件路径
+	TLSKeyFile    string // 服务器私钥文件路径
+	TLSCACertFile string // CA 证书文件路径（用于验证客户端证书）
+
+	// KeepAlive 配置
+	KeepAlive      time.Duration // KeepAlive 时间间隔
+	MaxConnAge     time.Duration // 最大连接存活时间
+
 	// 功能配置
 	EnableAudit     bool
 	EnablePolicy    bool

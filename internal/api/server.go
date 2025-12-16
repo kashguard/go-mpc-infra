@@ -25,7 +25,6 @@ import (
 	mpcgrpc "github.com/kashguard/go-mpc-wallet/internal/mpc/grpc"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/key"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/node"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/participant"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/signing"
 
@@ -72,7 +71,6 @@ type Server struct {
 	KeyService         *key.Service
 	SigningService     *signing.Service
 	CoordinatorService *coordinator.Service
-	ParticipantService *participant.Service
 	NodeManager        *node.Manager
 	NodeRegistry       *node.Registry
 	NodeDiscovery      *node.Discovery
@@ -100,7 +98,6 @@ func newServerWithComponents(
 	keyService *key.Service,
 	signingService *signing.Service,
 	coordinatorService *coordinator.Service,
-	participantService *participant.Service,
 	nodeManager *node.Manager,
 	nodeRegistry *node.Registry,
 	nodeDiscovery *node.Discovery,
@@ -123,7 +120,6 @@ func newServerWithComponents(
 		KeyService:         keyService,
 		SigningService:     signingService,
 		CoordinatorService: coordinatorService,
-		ParticipantService: participantService,
 		NodeManager:        nodeManager,
 		NodeRegistry:       nodeRegistry,
 		NodeDiscovery:      nodeDiscovery,

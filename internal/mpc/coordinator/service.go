@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/key"
@@ -55,6 +56,27 @@ func NewService(
 		grpcClient:     grpcClient,
 		thisNodeID:     thisNodeID,
 	}
+}
+
+// inferProtocolForDKG 根据算法/曲线推断协议，避免默认协议与请求不符
+func inferProtocolForDKG(algorithm, curve string, defaultProtocol string) string {
+	algo := strings.ToLower(algorithm)
+	cv := strings.ToLower(curve)
+
+	if algo == "eddsa" || algo == "schnorr" {
+		if cv == "ed25519" || cv == "secp256k1" {
+			return "frost"
+		}
+	}
+
+	if algo == "ecdsa" {
+		if cv == "secp256k1" || cv == "secp256r1" {
+			return "gg20"
+		}
+	}
+
+	// 回退到默认配置
+	return defaultProtocol
 }
 
 // CreateSigningSession 创建签名会话
@@ -151,10 +173,18 @@ func (s *Service) CreateDKGSession(ctx context.Context, req *CreateDKGSessionReq
 			Msg("Final participant node IDs for DKG session (coordinator does NOT participate, sorted)")
 	}
 
-	// 2. 选择协议
-	protocol := req.Protocol
-	if protocol == "" {
-		protocol = s.protocolEngine.DefaultProtocol()
+	// 2. 选择协议：先按请求/算法曲线推断，再回退默认
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("algorithm", req.Algorithm).
+		Str("curve", req.Curve).
+		Str("request_protocol", req.Protocol).
+		Str("default_protocol", s.protocolEngine.DefaultProtocol()).
+		Msg("CreateDKGSession: protocol selection input")
+
+	selectedProtocol := req.Protocol
+	if selectedProtocol == "" {
+		selectedProtocol = inferProtocolForDKG(req.Algorithm, req.Curve, s.protocolEngine.DefaultProtocol())
 	}
 
 	// 3. 创建DKG会话
@@ -162,12 +192,12 @@ func (s *Service) CreateDKGSession(ctx context.Context, req *CreateDKGSessionReq
 	log.Error().
 		Strs("node_ids", nodeIDs).
 		Str("key_id", req.KeyID).
-		Str("protocol", protocol).
+		Str("protocol", selectedProtocol).
 		Int("threshold", req.Threshold).
 		Int("total_nodes", req.TotalNodes).
 		Msg("About to create DKG session with node IDs")
 
-	dkgSession, err := s.sessionManager.CreateKeyGenSession(ctx, req.KeyID, protocol, req.Threshold, req.TotalNodes, nodeIDs)
+	dkgSession, err := s.sessionManager.CreateKeyGenSession(ctx, req.KeyID, selectedProtocol, req.Threshold, req.TotalNodes, nodeIDs)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create DKG session")
 	}
@@ -221,9 +251,9 @@ func (s *Service) NotifyParticipantsForDKG(ctx context.Context, req *CreateDKGSe
 		Int("total_nodes", req.TotalNodes).
 		Msg("Notifying leader participant to start DKG protocol")
 
-	// 通过 gRPC 发送 StartDKG RPC 给 leader
-	// 使用独立的 context 和超时，避免受 HTTP 请求超时影响
-	// DKG 可能需要较长时间（几分钟），设置 5 分钟超时
+		// 通过 gRPC 发送 StartDKG RPC 给 leader
+		// 使用独立的 context 和超时，避免受 HTTP 请求超时影响
+		// 缩短超时时间，加快失败检测
 	startReq := &pb.StartDKGRequest{
 		SessionId:  req.KeyID,
 		KeyId:      req.KeyID,
@@ -237,7 +267,7 @@ func (s *Service) NotifyParticipantsForDKG(ctx context.Context, req *CreateDKGSe
 	// 异步调用 StartDKG，避免阻塞 HTTP 请求
 	// 在 goroutine 内部创建 context，确保不会被外部 defer cancel 影响
 	go func() {
-		startDKGTimeout := 5 * time.Minute
+		startDKGTimeout := 2 * time.Minute
 		startDKGCtx, cancel := context.WithTimeout(context.Background(), startDKGTimeout)
 		defer cancel()
 

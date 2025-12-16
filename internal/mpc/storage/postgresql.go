@@ -240,13 +240,24 @@ func (s *PostgreSQLStore) SaveNode(ctx context.Context, node *NodeInfo) error {
 		return errors.Wrap(err, "failed to marshal metadata")
 	}
 
+	// 设置默认 purpose
+	purpose := node.Purpose
+	if purpose == "" {
+		if node.NodeType == "client" {
+			purpose = "backup"
+		} else {
+			purpose = "signing"
+		}
+	}
+
 	query := `
 		INSERT INTO nodes (
-			node_id, node_type, endpoint, public_key, status, capabilities, metadata,
+			node_id, node_type, purpose, endpoint, public_key, status, capabilities, metadata,
 			registered_at, last_heartbeat
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (node_id) DO UPDATE SET
 			node_type = EXCLUDED.node_type,
+			purpose = EXCLUDED.purpose,
 			endpoint = EXCLUDED.endpoint,
 			public_key = EXCLUDED.public_key,
 			status = EXCLUDED.status,
@@ -256,7 +267,7 @@ func (s *PostgreSQLStore) SaveNode(ctx context.Context, node *NodeInfo) error {
 	`
 
 	_, err = s.db.ExecContext(ctx, query,
-		node.NodeID, node.NodeType, node.Endpoint, node.PublicKey, node.Status,
+		node.NodeID, node.NodeType, purpose, node.Endpoint, node.PublicKey, node.Status,
 		capabilitiesJSON, metadataJSON, node.RegisteredAt, node.LastHeartbeat,
 	)
 	if err != nil {
@@ -269,7 +280,7 @@ func (s *PostgreSQLStore) SaveNode(ctx context.Context, node *NodeInfo) error {
 // GetNode 获取节点信息
 func (s *PostgreSQLStore) GetNode(ctx context.Context, nodeID string) (*NodeInfo, error) {
 	query := `
-		SELECT node_id, node_type, endpoint, public_key, status, capabilities, metadata,
+		SELECT node_id, node_type, purpose, endpoint, public_key, status, capabilities, metadata,
 			registered_at, last_heartbeat
 		FROM nodes
 		WHERE node_id = $1
@@ -279,9 +290,11 @@ func (s *PostgreSQLStore) GetNode(ctx context.Context, nodeID string) (*NodeInfo
 	var capabilitiesJSON []byte
 	var metadataJSON []byte
 	var lastHeartbeat sql.NullTime
+	var publicKey sql.NullString // ✅ 使用 sql.NullString 处理 NULL 值
+	var purpose sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, nodeID).Scan(
-		&node.NodeID, &node.NodeType, &node.Endpoint, &node.PublicKey, &node.Status,
+		&node.NodeID, &node.NodeType, &purpose, &node.Endpoint, &publicKey, &node.Status,
 		&capabilitiesJSON, &metadataJSON, &node.RegisteredAt, &lastHeartbeat,
 	)
 	if err != nil {
@@ -289,6 +302,25 @@ func (s *PostgreSQLStore) GetNode(ctx context.Context, nodeID string) (*NodeInfo
 			return nil, errors.New("node not found")
 		}
 		return nil, errors.Wrap(err, "failed to get node")
+	}
+
+	// ✅ 处理 NULL public_key
+	if publicKey.Valid {
+		node.PublicKey = publicKey.String
+	} else {
+		node.PublicKey = ""
+	}
+
+	// ✅ 处理 NULL purpose
+	if purpose.Valid {
+		node.Purpose = purpose.String
+	} else {
+		// 设置默认值
+		if node.NodeType == "client" {
+			node.Purpose = "backup"
+		} else {
+			node.Purpose = "signing"
+		}
 	}
 
 	if len(capabilitiesJSON) > 0 {
@@ -328,20 +360,31 @@ func (s *PostgreSQLStore) UpdateNode(ctx context.Context, node *NodeInfo) error 
 		return errors.Wrap(err, "failed to marshal metadata")
 	}
 
+	// 设置默认 purpose
+	purpose := node.Purpose
+	if purpose == "" {
+		if node.NodeType == "client" {
+			purpose = "backup"
+		} else {
+			purpose = "signing"
+		}
+	}
+
 	query := `
 		UPDATE nodes SET
 			node_type = $2,
-			endpoint = $3,
-			public_key = $4,
-			status = $5,
-			capabilities = $6,
-			metadata = $7,
-			last_heartbeat = $8
+			purpose = $3,
+			endpoint = $4,
+			public_key = $5,
+			status = $6,
+			capabilities = $7,
+			metadata = $8,
+			last_heartbeat = $9
 		WHERE node_id = $1
 	`
 
 	_, err = s.db.ExecContext(ctx, query,
-		node.NodeID, node.NodeType, node.Endpoint, node.PublicKey, node.Status,
+		node.NodeID, node.NodeType, purpose, node.Endpoint, node.PublicKey, node.Status,
 		capabilitiesJSON, metadataJSON, node.LastHeartbeat,
 	)
 	if err != nil {
@@ -360,7 +403,7 @@ func (s *PostgreSQLStore) ListNodes(ctx context.Context, filter *NodeFilter) ([]
 		filter.Limit = 50
 	}
 
-	query := `SELECT node_id, node_type, endpoint, public_key, status, capabilities, metadata,
+	query := `SELECT node_id, node_type, purpose, endpoint, public_key, status, capabilities, metadata,
 		registered_at, last_heartbeat
 		FROM nodes WHERE 1=1`
 	args := []interface{}{}
@@ -393,13 +436,34 @@ func (s *PostgreSQLStore) ListNodes(ctx context.Context, filter *NodeFilter) ([]
 		var capabilitiesJSON []byte
 		var metadataJSON []byte
 		var lastHeartbeat sql.NullTime
+		var publicKey sql.NullString // ✅ 使用 sql.NullString 处理 NULL 值
+		var purpose sql.NullString
 
 		err := rows.Scan(
-			&node.NodeID, &node.NodeType, &node.Endpoint, &node.PublicKey, &node.Status,
+			&node.NodeID, &node.NodeType, &purpose, &node.Endpoint, &publicKey, &node.Status,
 			&capabilitiesJSON, &metadataJSON, &node.RegisteredAt, &lastHeartbeat,
 		)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to scan node")
+		}
+
+		// ✅ 处理 NULL public_key
+		if publicKey.Valid {
+			node.PublicKey = publicKey.String
+		} else {
+			node.PublicKey = ""
+		}
+
+		// ✅ 处理 NULL purpose
+		if purpose.Valid {
+			node.Purpose = purpose.String
+		} else {
+			// 设置默认值
+			if node.NodeType == "client" {
+				node.Purpose = "backup"
+			} else {
+				node.Purpose = "signing"
+			}
 		}
 
 		if len(capabilitiesJSON) > 0 {
@@ -593,4 +657,247 @@ func (s *PostgreSQLStore) UpdateSigningSession(ctx context.Context, session *Sig
 	}
 
 	return nil
+}
+
+// SaveBackupShare 保存备份分片
+func (s *PostgreSQLStore) SaveBackupShare(ctx context.Context, keyID, nodeID string, shareIndex int, shareData []byte) error {
+	query := `
+		INSERT INTO backup_shares (key_id, node_id, share_index, share_data, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (key_id, node_id, share_index) DO UPDATE SET
+			share_data = EXCLUDED.share_data,
+			created_at = EXCLUDED.created_at
+	`
+
+	_, err := s.db.ExecContext(ctx, query, keyID, nodeID, shareIndex, shareData)
+	if err != nil {
+		return errors.Wrap(err, "failed to save backup share")
+	}
+
+	return nil
+}
+
+// GetBackupShare 获取备份分片
+func (s *PostgreSQLStore) GetBackupShare(ctx context.Context, keyID, nodeID string, shareIndex int) ([]byte, error) {
+	query := `
+		SELECT share_data
+		FROM backup_shares
+		WHERE key_id = $1 AND node_id = $2 AND share_index = $3
+	`
+
+	var shareData []byte
+	err := s.db.QueryRowContext(ctx, query, keyID, nodeID, shareIndex).Scan(&shareData)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.New("backup share not found")
+		}
+		return nil, errors.Wrap(err, "failed to get backup share")
+	}
+
+	return shareData, nil
+}
+
+// ListBackupShares 列出某个MPC分片的所有备份分片
+func (s *PostgreSQLStore) ListBackupShares(ctx context.Context, keyID, nodeID string) ([]*BackupShareInfo, error) {
+	query := `
+		SELECT key_id, node_id, share_index, share_data, created_at
+		FROM backup_shares
+		WHERE key_id = $1 AND node_id = $2
+		ORDER BY share_index
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, keyID, nodeID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list backup shares")
+	}
+	defer rows.Close()
+
+	var shares []*BackupShareInfo
+	for rows.Next() {
+		var share BackupShareInfo
+		err := rows.Scan(
+			&share.KeyID,
+			&share.NodeID,
+			&share.ShareIndex,
+			&share.ShareData,
+			&share.CreatedAt,
+		)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to scan backup share")
+		}
+		shares = append(shares, &share)
+	}
+
+	return shares, nil
+}
+
+// ListAllBackupShares 列出根密钥的所有备份分片（按nodeID分组）
+func (s *PostgreSQLStore) ListAllBackupShares(ctx context.Context, keyID string) (map[string][]*BackupShareInfo, error) {
+	query := `
+		SELECT key_id, node_id, share_index, share_data, created_at
+		FROM backup_shares
+		WHERE key_id = $1
+		ORDER BY node_id, share_index
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, keyID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list all backup shares")
+	}
+	defer rows.Close()
+
+	result := make(map[string][]*BackupShareInfo)
+	for rows.Next() {
+		var share BackupShareInfo
+		err := rows.Scan(
+			&share.KeyID,
+			&share.NodeID,
+			&share.ShareIndex,
+			&share.ShareData,
+			&share.CreatedAt,
+		)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to scan backup share")
+		}
+
+		if result[share.NodeID] == nil {
+			result[share.NodeID] = make([]*BackupShareInfo, 0)
+		}
+		result[share.NodeID] = append(result[share.NodeID], &share)
+	}
+
+	return result, nil
+}
+
+// SaveBackupShareDelivery 保存备份分片下发记录
+func (s *PostgreSQLStore) SaveBackupShareDelivery(ctx context.Context, delivery *BackupShareDelivery) error {
+	query := `
+		INSERT INTO backup_share_deliveries (
+			key_id, node_id, user_id, share_index, status,
+			delivered_at, confirmed_at, failure_reason, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (key_id, node_id, share_index, user_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			delivered_at = EXCLUDED.delivered_at,
+			confirmed_at = EXCLUDED.confirmed_at,
+			failure_reason = EXCLUDED.failure_reason,
+			updated_at = EXCLUDED.updated_at
+	`
+
+	var deliveredAt, confirmedAt interface{}
+	if delivery.DeliveredAt != nil {
+		deliveredAt = *delivery.DeliveredAt
+	}
+	if delivery.ConfirmedAt != nil {
+		confirmedAt = *delivery.ConfirmedAt
+	}
+
+	_, err := s.db.ExecContext(ctx, query,
+		delivery.KeyID, delivery.NodeID, delivery.UserID, delivery.ShareIndex, delivery.Status,
+		deliveredAt, confirmedAt, delivery.FailureReason, delivery.CreatedAt, delivery.UpdatedAt,
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to save backup share delivery")
+	}
+
+	return nil
+}
+
+// GetBackupShareDelivery 获取备份分片下发记录
+func (s *PostgreSQLStore) GetBackupShareDelivery(ctx context.Context, keyID, userID, nodeID string, shareIndex int) (*BackupShareDelivery, error) {
+	query := `
+		SELECT key_id, node_id, user_id, share_index, status,
+			delivered_at, confirmed_at, failure_reason, created_at, updated_at
+		FROM backup_share_deliveries
+		WHERE key_id = $1 AND user_id = $2 AND node_id = $3 AND share_index = $4
+	`
+
+	var delivery BackupShareDelivery
+	var deliveredAt, confirmedAt sql.NullTime
+
+	err := s.db.QueryRowContext(ctx, query, keyID, userID, nodeID, shareIndex).Scan(
+		&delivery.KeyID, &delivery.NodeID, &delivery.UserID, &delivery.ShareIndex, &delivery.Status,
+		&deliveredAt, &confirmedAt, &delivery.FailureReason, &delivery.CreatedAt, &delivery.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.New("backup share delivery not found")
+		}
+		return nil, errors.Wrap(err, "failed to get backup share delivery")
+	}
+
+	if deliveredAt.Valid {
+		delivery.DeliveredAt = &deliveredAt.Time
+	}
+	if confirmedAt.Valid {
+		delivery.ConfirmedAt = &confirmedAt.Time
+	}
+
+	return &delivery, nil
+}
+
+// UpdateBackupShareDeliveryStatus 更新备份分片下发状态
+func (s *PostgreSQLStore) UpdateBackupShareDeliveryStatus(ctx context.Context, keyID, userID, nodeID string, shareIndex int, status string, reason string) error {
+	query := `
+		UPDATE backup_share_deliveries
+		SET status = $5, failure_reason = $6, updated_at = NOW()
+	`
+
+	// 根据状态更新相应的时间字段
+	if status == "delivered" {
+		query += `, delivered_at = NOW()`
+	} else if status == "confirmed" {
+		query += `, confirmed_at = NOW()`
+	}
+
+	query += ` WHERE key_id = $1 AND user_id = $2 AND node_id = $3 AND share_index = $4`
+
+	_, err := s.db.ExecContext(ctx, query, keyID, userID, nodeID, shareIndex, status, reason)
+	if err != nil {
+		return errors.Wrap(err, "failed to update backup share delivery status")
+	}
+
+	return nil
+}
+
+// ListBackupShareDeliveries 列出备份分片下发记录
+func (s *PostgreSQLStore) ListBackupShareDeliveries(ctx context.Context, keyID, nodeID string) ([]*BackupShareDelivery, error) {
+	query := `
+		SELECT key_id, node_id, user_id, share_index, status,
+			delivered_at, confirmed_at, failure_reason, created_at, updated_at
+		FROM backup_share_deliveries
+		WHERE key_id = $1 AND node_id = $2
+		ORDER BY created_at DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, keyID, nodeID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list backup share deliveries")
+	}
+	defer rows.Close()
+
+	var deliveries []*BackupShareDelivery
+	for rows.Next() {
+		var delivery BackupShareDelivery
+		var deliveredAt, confirmedAt sql.NullTime
+
+		err := rows.Scan(
+			&delivery.KeyID, &delivery.NodeID, &delivery.UserID, &delivery.ShareIndex, &delivery.Status,
+			&deliveredAt, &confirmedAt, &delivery.FailureReason, &delivery.CreatedAt, &delivery.UpdatedAt,
+		)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to scan backup share delivery")
+		}
+
+		if deliveredAt.Valid {
+			delivery.DeliveredAt = &deliveredAt.Time
+		}
+		if confirmedAt.Valid {
+			delivery.ConfirmedAt = &confirmedAt.Time
+		}
+
+		deliveries = append(deliveries, &delivery)
+	}
+
+	return deliveries, nil
 }

@@ -82,6 +82,37 @@ func inferProtocol(algorithm, curve, defaultProtocol string) string {
 	return "gg20"
 }
 
+// CreateSigningSession 创建签名会话
+func (s *Service) CreateSigningSession(ctx context.Context, keyID string, protocol string) (*session.Session, error) {
+	// 获取密钥信息
+	keyMetadata, err := s.keyService.GetKey(ctx, keyID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get key")
+	}
+
+	// 如果未指定协议，使用默认协议或根据密钥信息推断
+	if protocol == "" {
+		protocol = inferProtocol(keyMetadata.Algorithm, keyMetadata.Curve, s.defaultProtocol)
+	}
+
+	// 创建会话
+	signingSession, err := s.sessionManager.CreateSession(ctx, keyID, protocol, keyMetadata.Threshold, keyMetadata.TotalNodes)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create signing session")
+	}
+
+	return signingSession, nil
+}
+
+// GetSigningSession 获取签名会话
+func (s *Service) GetSigningSession(ctx context.Context, sessionID string) (*session.Session, error) {
+	session, err := s.sessionManager.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get signing session")
+	}
+	return session, nil
+}
+
 // ThresholdSign 阈值签名
 func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignResponse, error) {
 	// 1. 获取密钥信息
@@ -99,31 +130,60 @@ func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignRes
 		return nil, errors.Wrap(err, "failed to create signing session")
 	}
 
-	// 4. 选择参与节点（达到阈值即可），首选 totalNodes 规模，保证不小于 threshold
-	limit := keyMetadata.TotalNodes
-	if limit < keyMetadata.Threshold {
-		limit = keyMetadata.Threshold
-	}
-	participants, err := s.nodeDiscovery.DiscoverNodes(ctx, node.NodeTypeParticipant, node.NodeStatusActive, limit)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to discover participants")
-	}
+	// 4. 选择参与节点（2-of-3 模式：只选择服务器节点）
+	// 对于 2-of-3 MPC，签名只需要服务器节点（server-proxy-1, server-proxy-2）
+	// 客户端节点不参与签名流程
+	var participatingNodes []string
+	
+	if keyMetadata.Threshold == 2 && keyMetadata.TotalNodes == 3 {
+		// 固定 2-of-3 模式：使用固定的服务器节点列表
+		participatingNodes = []string{"server-proxy-1", "server-proxy-2"}
+		
+		log.Info().
+			Str("key_id", req.KeyID).
+			Strs("participating_nodes", participatingNodes).
+			Int("threshold", keyMetadata.Threshold).
+			Int("total_nodes", keyMetadata.TotalNodes).
+			Msg("Using fixed server nodes for 2-of-3 signing")
+	} else {
+		// 非 2-of-3 模式：使用动态节点发现（保持向后兼容）
+		// 只选择 purpose=signing 的节点
+		limit := keyMetadata.TotalNodes
+		if limit < keyMetadata.Threshold {
+			limit = keyMetadata.Threshold
+		}
+		
+		// 发现节点时，只选择 participant 类型且 purpose=signing 的节点
+		participants, err := s.nodeDiscovery.DiscoverNodes(ctx, node.NodeTypeParticipant, node.NodeStatusActive, limit)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to discover participants")
+		}
 
-	if len(participants) < keyMetadata.Threshold {
-		return nil, errors.Errorf("insufficient active nodes: need %d, have %d", keyMetadata.Threshold, len(participants))
-	}
+		// 过滤出 purpose=signing 的节点（排除 purpose=backup 的节点）
+		signingNodes := make([]*node.Node, 0)
+		for _, p := range participants {
+			if p.Purpose == "signing" || p.Purpose == "" {
+				signingNodes = append(signingNodes, p)
+			}
+		}
 
-	// 使用最多 totalNodes 个节点（默认等于 DKG 时 n），但至少 threshold 个
-	needNodes := keyMetadata.TotalNodes
-	if needNodes < keyMetadata.Threshold {
-		needNodes = keyMetadata.Threshold
-	}
-	if needNodes > len(participants) {
-		needNodes = len(participants)
-	}
-	participatingNodes := make([]string, 0, needNodes)
-	for i := 0; i < needNodes; i++ {
-		participatingNodes = append(participatingNodes, participants[i].NodeID)
+		if len(signingNodes) < keyMetadata.Threshold {
+			return nil, errors.Errorf("insufficient active signing nodes: need %d, have %d", keyMetadata.Threshold, len(signingNodes))
+		}
+
+		// 使用最多 totalNodes 个节点，但至少 threshold 个
+		needNodes := keyMetadata.TotalNodes
+		if needNodes < keyMetadata.Threshold {
+			needNodes = keyMetadata.Threshold
+		}
+		if needNodes > len(signingNodes) {
+			needNodes = len(signingNodes)
+		}
+		
+		participatingNodes = make([]string, 0, needNodes)
+		for i := 0; i < needNodes; i++ {
+			participatingNodes = append(participatingNodes, signingNodes[i].NodeID)
+		}
 	}
 
 	// 更新会话的参与节点

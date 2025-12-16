@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -176,18 +177,18 @@ func (c *GRPCClient) SendStartDKG(ctx context.Context, nodeID string, req *pb.St
 		Str("node_id", nodeID).
 		Str("key_id", req.KeyId).
 		Msg("Sending StartDKG RPC to participant")
-	
+
 	client, err := c.getOrCreateConnection(ctx, nodeID)
 	if err != nil {
 		log.Error().Err(err).Str("node_id", nodeID).Msg("Failed to get gRPC connection")
 		return nil, errors.Wrapf(err, "failed to get connection to node %s", nodeID)
 	}
-	
+
 	log.Debug().
 		Str("node_id", nodeID).
 		Str("key_id", req.KeyId).
 		Msg("Calling StartDKG RPC")
-	
+
 	resp, err := client.StartDKG(ctx, req)
 	if err != nil {
 		log.Error().
@@ -197,14 +198,14 @@ func (c *GRPCClient) SendStartDKG(ctx context.Context, nodeID string, req *pb.St
 			Msg("StartDKG RPC call failed")
 		return nil, err
 	}
-	
+
 	log.Debug().
 		Str("node_id", nodeID).
 		Str("key_id", req.KeyId).
 		Bool("started", resp.Started).
 		Str("message", resp.Message).
 		Msg("StartDKG RPC call succeeded")
-	
+
 	return resp, nil
 }
 
@@ -269,7 +270,7 @@ func (c *GRPCClient) SendSigningMessage(ctx context.Context, nodeID string, msg 
 
 	// 序列化tss-lib消息
 	// WireBytes()返回 (wireBytes []byte, routing *MessageRouting, err error)
-	msgBytes, _, err := msg.WireBytes()
+	msgBytes, routing, err := msg.WireBytes()
 	if err != nil {
 		return errors.Wrap(err, "failed to serialize tss message")
 	}
@@ -277,21 +278,54 @@ func (c *GRPCClient) SendSigningMessage(ctx context.Context, nodeID string, msg 
 	// 确定轮次（tss-lib的MessageRouting可能不包含Round字段，使用0作为默认值）
 	// 实际轮次信息可以从消息内容中提取，这里简化处理
 	round := int32(0)
+	isBroadcast := len(msg.GetTo()) == 0
+	if isBroadcast {
+		round = -1
+	}
+
+	// ✅ 详细日志：记录消息发送详情
+	msgType := fmt.Sprintf("%T", msg)
+	log.Info().
+		Str("session_id", sessionID).
+		Str("this_node_id", c.thisNodeID).
+		Str("target_node_id", nodeID).
+		Str("message_type", msgType).
+		Int32("round", round).
+		Bool("is_broadcast", isBroadcast).
+		Int("msg_bytes_len", len(msgBytes)).
+		Int("target_count", len(msg.GetTo())).
+		Interface("routing", routing).
+		Msg("🔍 [DIAGNOSTIC] Sending signing message via gRPC")
 
 	// 使用SubmitSignatureShare发送消息
 	// 注意：NodeId应该表示发送方节点ID，而不是目标节点ID
 	shareReq := &pb.ShareRequest{
-		SessionId: sessionID, // 使用传入的会话ID
+		SessionId: sessionID,    // 使用传入的会话ID
 		NodeId:    c.thisNodeID, // 发送方节点ID（当前节点）
 		ShareData: msgBytes,
 		Round:     round,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	_, err = client.SubmitSignatureShare(ctx, shareReq)
+	resp, err := client.SubmitSignatureShare(ctx, shareReq)
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("session_id", sessionID).
+			Str("this_node_id", c.thisNodeID).
+			Str("target_node_id", nodeID).
+			Msg("🔍 [DIAGNOSTIC] Failed to send signing message via gRPC")
 		return errors.Wrapf(err, "failed to send signing message to node %s", nodeID)
 	}
+
+	log.Info().
+		Str("session_id", sessionID).
+		Str("this_node_id", c.thisNodeID).
+		Str("target_node_id", nodeID).
+		Bool("accepted", resp.Accepted).
+		Int32("next_round", resp.NextRound).
+		Str("message", resp.Message).
+		Msg("🔍 [DIAGNOSTIC] Signing message sent successfully via gRPC")
 
 	return nil
 }
@@ -339,7 +373,7 @@ func (c *GRPCClient) SendKeygenMessage(ctx context.Context, nodeID string, msg t
 	// 注意：NodeId应该表示发送方节点ID，而不是目标节点ID
 	// 目标节点ID已经通过gRPC调用的目标地址确定了
 	shareReq := &pb.ShareRequest{
-		SessionId: sessionID, // 使用keyID作为会话ID
+		SessionId: sessionID,    // 使用keyID作为会话ID
 		NodeId:    c.thisNodeID, // 发送方节点ID（当前节点）
 		ShareData: msgBytes,
 		Round:     round,

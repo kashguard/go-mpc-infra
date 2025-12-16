@@ -2,6 +2,8 @@ package keys
 
 import (
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
@@ -113,18 +115,54 @@ func postCreateKeyHandler(s *api.Server) echo.HandlerFunc {
 			// 2. 执行 DKG 并存储各自的 key share
 			// 3. DKG 完成后更新 session 状态
 
-			// 返回 Pending 状态的占位符密钥
-			// DKG 完成后，密钥状态会异步更新为 Active
+			// 先使用占位符作为初始值，后续轮询会覆盖
 			keyMetadata = placeholderKey
 
-			log.Info().
-				Str("key_id", keyID).
-				Str("status", keyMetadata.Status).
-				Strs("participants", dkgSession.ParticipatingNodes).
-				Msg("Returning placeholder key - DKG will be executed by participants asynchronously")
+			// 同步等待 DKG 完成（与 DKGService 缩短后的默认保持一致）
+			waitTimeout := 2 * time.Minute
+			pollInterval := 2 * time.Second
+			deadline := time.Now().Add(waitTimeout)
 
-			// 为了满足响应校验（Status 枚举不包含 Pending），响应中先返回 Inactive
-			keyMetadata.Status = "Inactive"
+			for {
+				// 尝试获取最新密钥元数据
+				currentKey, err := s.KeyService.GetKey(ctx, keyID)
+				if err == nil {
+					// 成功获取到元数据时检查状态
+					if strings.EqualFold(currentKey.Status, "Active") {
+						keyMetadata = currentKey
+						log.Info().
+							Str("key_id", keyID).
+							Str("status", currentKey.Status).
+							Strs("participants", dkgSession.ParticipatingNodes).
+							Msg("DKG completed successfully, returning Active key")
+						break
+					}
+					if strings.EqualFold(currentKey.Status, "Failed") {
+						log.Error().
+							Str("key_id", keyID).
+							Str("status", currentKey.Status).
+							Msg("DKG failed while waiting for completion")
+						return httperrors.NewHTTPError(http.StatusInternalServerError, types.PublicHTTPErrorTypeGeneric, "DKG failed")
+					}
+					// 未完成继续轮询
+					keyMetadata = currentKey
+				}
+
+				if time.Now().After(deadline) {
+					status := ""
+					if keyMetadata != nil {
+						status = keyMetadata.Status
+					}
+					log.Error().
+						Str("key_id", keyID).
+						Str("status", status).
+						Dur("wait_timeout", waitTimeout).
+						Msg("DKG did not complete within timeout")
+					return httperrors.NewHTTPError(http.StatusGatewayTimeout, types.PublicHTTPErrorTypeGeneric, "DKG did not complete in time")
+				}
+
+				time.Sleep(pollInterval)
+			}
 		} else {
 			// 如果没有 Coordinator 服务，使用原有的方式（直接执行 DKG，不使用会话管理）
 			req := &key.CreateKeyRequest{

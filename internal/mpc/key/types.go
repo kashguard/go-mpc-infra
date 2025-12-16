@@ -38,6 +38,7 @@ type CreateKeyRequest struct {
 	ChainType   string
 	Description string
 	Tags        map[string]string
+	UserID      string // 用户ID，用于生成客户端节点ID（client-{userID}）
 }
 
 // KeyFilter 密钥过滤条件

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/scrypt"
 )
 
@@ -239,20 +240,57 @@ func (s *FileSystemKeyShareStorage) StoreKeyData(ctx context.Context, keyID stri
 func (s *FileSystemKeyShareStorage) GetKeyData(ctx context.Context, keyID string, nodeID string) ([]byte, error) {
 	filePath := filepath.Join(s.basePath, keyID, nodeID+".keydata.enc")
 
+	// ✅ 添加详细日志
+	log.Info().
+		Str("key_id", keyID).
+		Str("node_id", nodeID).
+		Str("file_path", filePath).
+		Str("base_path", s.basePath).
+		Msg("🔍 [DIAGNOSTIC] GetKeyData: attempting to load LocalPartySaveData")
+
 	// 读取加密文件
 	encrypted, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			log.Error().
+				Str("key_id", keyID).
+				Str("node_id", nodeID).
+				Str("file_path", filePath).
+				Msg("🔍 [DIAGNOSTIC] GetKeyData: file does not exist")
 			return nil, errors.New("key data not found")
 		}
+		log.Error().
+			Err(err).
+			Str("key_id", keyID).
+			Str("node_id", nodeID).
+			Str("file_path", filePath).
+			Msg("🔍 [DIAGNOSTIC] GetKeyData: failed to read file")
 		return nil, errors.Wrap(err, "failed to read encrypted key data")
 	}
+
+	log.Info().
+		Str("key_id", keyID).
+		Str("node_id", nodeID).
+		Int("encrypted_size", len(encrypted)).
+		Msg("🔍 [DIAGNOSTIC] GetKeyData: file read successfully, decrypting")
 
 	// 解密数据
 	keyData, err := s.decrypt(encrypted)
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("key_id", keyID).
+			Str("node_id", nodeID).
+			Int("encrypted_size", len(encrypted)).
+			Msg("🔍 [DIAGNOSTIC] GetKeyData: decryption failed")
 		return nil, errors.Wrap(err, "failed to decrypt key data")
 	}
+
+	log.Info().
+		Str("key_id", keyID).
+		Str("node_id", nodeID).
+		Int("decrypted_size", len(keyData)).
+		Msg("🔍 [DIAGNOSTIC] GetKeyData: decryption successful")
 
 	return keyData, nil
 }

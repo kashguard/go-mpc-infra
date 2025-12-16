@@ -53,7 +53,6 @@ var mpcServiceSet = wire.NewSet(
 	NewKeyServiceProvider,
 	NewSigningServiceProvider,
 	NewCoordinatorServiceProvider,
-	NewParticipantServiceProvider,
 	// Service discovery
 	NewMPCDiscoveryService,
 )

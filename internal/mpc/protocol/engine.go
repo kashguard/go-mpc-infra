@@ -23,7 +23,8 @@ type Engine interface {
 	ProcessIncomingKeygenMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte, isBroadcast bool) error
 
 	// 处理接收到的签名消息
-	ProcessIncomingSigningMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte) error
+	// isBroadcast 标记消息是否广播，用于 tss UpdateFromBytes
+	ProcessIncomingSigningMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte, isBroadcast bool) error
 
 	// 支持的协议
 	SupportedProtocols() []string

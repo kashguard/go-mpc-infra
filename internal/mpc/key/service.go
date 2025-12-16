@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/google/uuid"
+	"github.com/kashguard/go-mpc-wallet/internal/mpc/backup"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/chain"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
@@ -21,6 +23,8 @@ type Service struct {
 	keyShareStorage storage.KeyShareStorage
 	protocolEngine  protocol.Engine
 	dkgService      *DKGService
+	backupService   backup.SSSBackupService
+	// derivationService *DerivationService
 }
 
 // NewService 创建密钥服务
@@ -29,12 +33,14 @@ func NewService(
 	keyShareStorage storage.KeyShareStorage,
 	protocolEngine protocol.Engine,
 	dkgService *DKGService,
+	backupService backup.SSSBackupService,
 ) *Service {
 	return &Service{
 		metadataStore:   metadataStore,
 		keyShareStorage: keyShareStorage,
 		protocolEngine:  protocolEngine,
 		dkgService:      dkgService,
+		backupService:   backupService,
 	}
 }
 
@@ -492,4 +498,319 @@ func (s *Service) GenerateAddress(ctx context.Context, keyID string, chainType s
 	}
 
 	return address, nil
+}
+
+// CreateRootKey 创建根密钥（执行DKG，2-of-3模式）
+func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) (*RootKeyMetadata, error) {
+	// 生成密钥ID（如果请求中未提供）
+	keyID := req.KeyID
+	if keyID == "" {
+		keyID = "root-key-" + uuid.New().String()
+	}
+
+	// 设置默认值
+	threshold := req.Threshold
+	if threshold == 0 {
+		threshold = 2 // 默认 2-of-3
+	}
+	totalNodes := req.TotalNodes
+	if totalNodes == 0 {
+		totalNodes = 3 // 默认 3 个节点
+	}
+
+	// 构建 CreateKeyRequest（用于 DKG）
+	dkgReq := &CreateKeyRequest{
+		KeyID:       keyID,
+		Algorithm:   req.Algorithm,
+		Curve:       req.Curve,
+		Threshold:   threshold,
+		TotalNodes:  totalNodes,
+		UserID:      req.UserID,
+		Description: req.Description,
+		Tags:        req.Tags,
+	}
+
+	// 执行 DKG
+	var dkgResp *protocol.KeyGenResponse
+	var err error
+	if s.dkgService != nil {
+		dkgResp, err = s.dkgService.ExecuteDKG(ctx, keyID, dkgReq)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to execute DKG")
+		}
+	} else {
+		return nil, errors.New("DKG service is required for root key creation")
+	}
+
+	// 存储密钥分片（只存储服务器节点的分片，客户端分片不存储）
+	for nodeID, share := range dkgResp.KeyShares {
+		// 只存储服务器节点（server-proxy-1, server-proxy-2）的分片
+		// 客户端节点（client-{userID}）的分片不存储在服务器端
+		if strings.HasPrefix(nodeID, "server-") {
+			if err := s.keyShareStorage.StoreKeyShare(ctx, keyID, nodeID, share.Share); err != nil {
+				return nil, errors.Wrapf(err, "failed to store key share for node %s", nodeID)
+			}
+		}
+		// 客户端分片：不存储在服务器端，依赖 SSS 备份分片
+	}
+
+	// 保存根密钥元数据
+	now := time.Now()
+	rootKeyMetadata := &RootKeyMetadata{
+		KeyID:        keyID,
+		PublicKey:    dkgResp.PublicKey.Hex,
+		Algorithm:    req.Algorithm,
+		Curve:        req.Curve,
+		Threshold:    threshold,
+		TotalNodes:   totalNodes,
+		Protocol:     req.Protocol,
+		Status:       "Active",
+		Description:  req.Description,
+		Tags:         req.Tags,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// 使用现有的 KeyMetadata 存储（暂时复用，后续可以分离）
+	storageKey := &storage.KeyMetadata{
+		KeyID:        rootKeyMetadata.KeyID,
+		PublicKey:    rootKeyMetadata.PublicKey,
+		Algorithm:    rootKeyMetadata.Algorithm,
+		Curve:        rootKeyMetadata.Curve,
+		Threshold:    rootKeyMetadata.Threshold,
+		TotalNodes:   rootKeyMetadata.TotalNodes,
+		ChainType:    "", // 根密钥没有链类型
+		Address:      "",
+		Status:       rootKeyMetadata.Status,
+		Description:  rootKeyMetadata.Description,
+		Tags:         rootKeyMetadata.Tags,
+		CreatedAt:    rootKeyMetadata.CreatedAt,
+		UpdatedAt:    rootKeyMetadata.UpdatedAt,
+		DeletionDate: rootKeyMetadata.DeletionDate,
+	}
+
+	if err := s.metadataStore.SaveKeyMetadata(ctx, storageKey); err != nil {
+		return nil, errors.Wrap(err, "failed to save root key metadata")
+	}
+
+	// 集成 SSS 备份服务：对每个 MPC 分片分别进行 SSS 备份
+	if s.backupService != nil {
+		backupStorage, ok := s.metadataStore.(storage.BackupShareStorage)
+		if !ok {
+			log.Warn().Msg("MetadataStore does not implement BackupShareStorage, skipping SSS backup")
+		} else {
+			for nodeID, mpcShare := range dkgResp.KeyShares {
+				// 对单个MPC分片进行SSS备份（不是完整密钥）
+				backupShares, err := s.backupService.GenerateBackupShares(ctx, mpcShare.Share, 3, 5)
+				if err != nil {
+					log.Error().
+						Err(err).
+						Str("key_id", keyID).
+						Str("node_id", nodeID).
+						Msg("Failed to generate backup shares for MPC share")
+					// 继续处理其他分片，不中断流程
+					continue
+				}
+
+				// 存储备份分片
+				for i, backupShare := range backupShares {
+					shareIndex := i + 1
+					
+					// 保存备份分片到存储
+					if err := backupStorage.SaveBackupShare(ctx, keyID, nodeID, shareIndex, backupShare.ShareData); err != nil {
+						log.Error().
+							Err(err).
+							Str("key_id", keyID).
+							Str("node_id", nodeID).
+							Int("share_index", shareIndex).
+							Msg("Failed to save backup share")
+						// 继续处理其他备份分片
+						continue
+					}
+
+					// 如果是客户端分片或需要下发的服务器分片，调用下发接口
+					if (strings.HasPrefix(nodeID, "client-") && shareIndex == 1) ||
+						(strings.HasPrefix(nodeID, "server-") && shareIndex == 3) {
+						// 下发备份分片到客户端
+						if err := s.backupService.DeliverBackupShareToClient(ctx, keyID, req.UserID, nodeID, shareIndex, backupShare); err != nil {
+							log.Warn().
+								Err(err).
+								Str("key_id", keyID).
+								Str("node_id", nodeID).
+								Int("share_index", shareIndex).
+								Msg("Failed to deliver backup share to client (non-critical)")
+							// 下发失败不影响主流程，只记录警告
+						} else {
+							log.Info().
+								Str("key_id", keyID).
+								Str("node_id", nodeID).
+								Int("share_index", shareIndex).
+								Msg("Backup share delivered to client")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return rootKeyMetadata, nil
+}
+
+// GetRootKey 获取根密钥信息
+func (s *Service) GetRootKey(ctx context.Context, keyID string) (*RootKeyMetadata, error) {
+	storageKey, err := s.metadataStore.GetKeyMetadata(ctx, keyID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get root key metadata")
+	}
+
+	rootKeyMetadata := &RootKeyMetadata{
+		KeyID:        storageKey.KeyID,
+		PublicKey:    storageKey.PublicKey,
+		Algorithm:    storageKey.Algorithm,
+		Curve:        storageKey.Curve,
+		Threshold:    storageKey.Threshold,
+		TotalNodes:   storageKey.TotalNodes,
+		Protocol:     "", // TODO: 从存储中读取协议信息
+		Status:       storageKey.Status,
+		Description:  storageKey.Description,
+		Tags:         storageKey.Tags,
+		CreatedAt:    storageKey.CreatedAt,
+		UpdatedAt:    storageKey.UpdatedAt,
+		DeletionDate: storageKey.DeletionDate,
+	}
+
+	return rootKeyMetadata, nil
+}
+
+// DeleteRootKey 删除根密钥
+func (s *Service) DeleteRootKey(ctx context.Context, keyID string) error {
+	// 获取根密钥信息
+	rootKey, err := s.GetRootKey(ctx, keyID)
+	if err != nil {
+		return errors.Wrap(err, "failed to get root key")
+	}
+
+	// 删除所有节点的密钥分片
+	// TODO: 从节点管理器获取所有节点ID
+	nodeIDs := []string{"server-proxy-1", "server-proxy-2"}
+	for _, nodeID := range nodeIDs {
+		if err := s.keyShareStorage.DeleteKeyShare(ctx, keyID, nodeID); err != nil {
+			// 记录错误但继续删除其他分片
+			log.Warn().Err(err).Str("key_id", keyID).Str("node_id", nodeID).Msg("Failed to delete key share")
+		}
+	}
+
+	// 更新密钥状态为删除
+	now := time.Now()
+	rootKey.Status = "Deleted"
+	rootKey.DeletionDate = &now
+	rootKey.UpdatedAt = now
+
+	storageKey := &storage.KeyMetadata{
+		KeyID:        rootKey.KeyID,
+		PublicKey:    rootKey.PublicKey,
+		Algorithm:    rootKey.Algorithm,
+		Curve:        rootKey.Curve,
+		Threshold:    rootKey.Threshold,
+		TotalNodes:   rootKey.TotalNodes,
+		ChainType:    "",
+		Address:      "",
+		Status:       rootKey.Status,
+		Description:  rootKey.Description,
+		Tags:         rootKey.Tags,
+		CreatedAt:    rootKey.CreatedAt,
+		UpdatedAt:    rootKey.UpdatedAt,
+		DeletionDate: rootKey.DeletionDate,
+	}
+
+	if err := s.metadataStore.UpdateKeyMetadata(ctx, storageKey); err != nil {
+		return errors.Wrap(err, "failed to update root key status")
+	}
+
+	return nil
+}
+
+// DeriveWalletKey 派生钱包密钥（Hardened Derivation）
+func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyRequest) (*WalletKeyMetadata, error) {
+	// 获取根密钥
+	rootKey, err := s.GetRootKey(ctx, req.RootKeyID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get root key")
+	}
+
+	// TODO: 实现 Hardened Derivation
+	// 使用 BIP32/BIP44 标准的 Hardened Derivation
+	// 从根密钥的公钥派生钱包密钥的公钥
+	// 这需要实现 derivation 服务
+
+	// 临时实现：生成钱包ID
+	walletID := "wallet-" + uuid.New().String()
+
+	// 解析根密钥的公钥
+	pubKeyBytes, err := hex.DecodeString(rootKey.PublicKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode root key public key")
+	}
+
+	// TODO: 使用 Hardened Derivation 派生钱包公钥
+	// walletPubKey := deriveHardenedKey(pubKeyBytes, req.ChainType, req.Index)
+	// 暂时使用根密钥的公钥（后续实现真正的派生）
+	walletPubKey := pubKeyBytes
+
+	// 生成地址
+	var adapter chain.Adapter
+	switch req.ChainType {
+	case "bitcoin", "btc":
+		adapter = chain.NewBitcoinAdapter(&chaincfg.MainNetParams)
+	case "ethereum", "eth", "evm":
+		adapter = chain.NewEthereumAdapter(big.NewInt(1)) // mainnet
+	default:
+		return nil, errors.Errorf("unsupported chain type: %s", req.ChainType)
+	}
+
+	address, err := adapter.GenerateAddress(walletPubKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to generate wallet address")
+	}
+
+	// 保存钱包密钥元数据
+	now := time.Now()
+	walletMetadata := &WalletKeyMetadata{
+		WalletID:     walletID,
+		RootKeyID:    req.RootKeyID,
+		ChainType:    req.ChainType,
+		Index:        req.Index,
+		PublicKey:    hex.EncodeToString(walletPubKey),
+		Address:      address,
+		Status:       "Active",
+		Description:  req.Description,
+		Tags:         req.Tags,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// TODO: 实现钱包密钥的存储（需要新的表结构）
+	// 暂时使用根密钥表存储（不推荐，但保持兼容性）
+	storageKey := &storage.KeyMetadata{
+		KeyID:        walletID,
+		PublicKey:    walletMetadata.PublicKey,
+		Algorithm:    rootKey.Algorithm,
+		Curve:        rootKey.Curve,
+		Threshold:    rootKey.Threshold,
+		TotalNodes:   rootKey.TotalNodes,
+		ChainType:    walletMetadata.ChainType,
+		Address:      walletMetadata.Address,
+		Status:       walletMetadata.Status,
+		Description:  walletMetadata.Description,
+		Tags:         walletMetadata.Tags,
+		CreatedAt:    walletMetadata.CreatedAt,
+		UpdatedAt:    walletMetadata.UpdatedAt,
+		DeletionDate: walletMetadata.DeletionDate,
+	}
+
+	if err := s.metadataStore.SaveKeyMetadata(ctx, storageKey); err != nil {
+		return nil, errors.Wrap(err, "failed to save wallet key metadata")
+	}
+
+	return walletMetadata, nil
 }

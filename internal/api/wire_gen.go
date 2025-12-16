@@ -64,7 +64,7 @@ func InitNewServer(server config.Server) (*Server, error) {
 		return nil, err
 	}
 	discovery := NewNodeDiscovery(manager, discoveryService)
-	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery)
+	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery, grpcClient, server)
 	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService)
 	client, err := NewRedisClient(server)
 	if err != nil {
@@ -74,13 +74,12 @@ func InitNewServer(server config.Server) (*Server, error) {
 	sessionManager := NewSessionManager(metadataStore, sessionStore, server)
 	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery, server, grpcClient)
 	coordinatorService := NewCoordinatorServiceProvider(server, keyService, sessionManager, discovery, engine, grpcClient)
-	participantService := NewParticipantServiceProvider(server, keyShareStorage, engine)
 	registry := NewNodeRegistry(manager)
-	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage)
+	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage, grpcClient)
 	if err != nil {
 		return nil, err
 	}
-	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, participantService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
+	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
 	return apiServer, nil
 }
 
@@ -122,7 +121,7 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 		return nil, err
 	}
 	discovery := NewNodeDiscovery(manager, discoveryService)
-	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery)
+	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery, grpcClient, server)
 	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService)
 	client, err := NewRedisClient(server)
 	if err != nil {
@@ -132,13 +131,12 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 	sessionManager := NewSessionManager(metadataStore, sessionStore, server)
 	signingService := NewSigningServiceProvider(keyService, engine, sessionManager, discovery, server, grpcClient)
 	coordinatorService := NewCoordinatorServiceProvider(server, keyService, sessionManager, discovery, engine, grpcClient)
-	participantService := NewParticipantServiceProvider(server, keyShareStorage, engine)
 	registry := NewNodeRegistry(manager)
-	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage)
+	grpcServer, err := NewMPCGRPCServer(server, engine, sessionManager, keyShareStorage, grpcClient)
 	if err != nil {
 		return nil, err
 	}
-	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, participantService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
+	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
 	return apiServer, nil
 }
 
@@ -176,7 +174,6 @@ var mpcServiceSet = wire.NewSet(
 	NewKeyServiceProvider,
 	NewSigningServiceProvider,
 	NewCoordinatorServiceProvider,
-	NewParticipantServiceProvider,
 
 	NewMPCDiscoveryService,
 )

@@ -123,34 +123,36 @@ func (p *GG18Protocol) GenerateKeyShare(ctx context.Context, req *KeyGenRequest)
 	p.saveKeyRecord(keyID, record)
 
 	// 持久化 LocalPartySaveData 到 keyShareStorage（用于签名时加载）
-	if p.keyShareStorage != nil {
-		keyDataBytes, err := serializeLocalPartySaveData(keyData)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to serialize LocalPartySaveData")
-		}
-		log.Info().
+	// 注意：keyShareStorage 是必需的，如果为 nil，DKG 应该失败
+	if p.keyShareStorage == nil {
+		log.Error().
 			Str("key_id", keyID).
 			Str("node_id", p.thisNodeID).
-			Int("key_data_bytes", len(keyDataBytes)).
-			Msg("Storing LocalPartySaveData to keyShareStorage")
-		if err := p.keyShareStorage.StoreKeyData(ctx, keyID, p.thisNodeID, keyDataBytes); err != nil {
-			log.Error().
-				Err(err).
-				Str("key_id", keyID).
-				Str("node_id", p.thisNodeID).
-				Msg("Failed to store LocalPartySaveData")
-			return nil, errors.Wrap(err, "failed to store LocalPartySaveData")
-		}
-		log.Info().
-			Str("key_id", keyID).
-			Str("node_id", p.thisNodeID).
-			Msg("LocalPartySaveData stored successfully")
-	} else {
-		log.Warn().
-			Str("key_id", keyID).
-			Str("node_id", p.thisNodeID).
-			Msg("keyShareStorage is nil, cannot store LocalPartySaveData")
+			Msg("keyShareStorage is nil, cannot store LocalPartySaveData - DKG will fail")
+		return nil, errors.New("keyShareStorage is nil, cannot store LocalPartySaveData")
 	}
+
+	keyDataBytes, err := serializeLocalPartySaveData(keyData)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to serialize LocalPartySaveData")
+	}
+	log.Info().
+		Str("key_id", keyID).
+		Str("node_id", p.thisNodeID).
+		Int("key_data_bytes", len(keyDataBytes)).
+		Msg("Storing LocalPartySaveData to keyShareStorage")
+	if err := p.keyShareStorage.StoreKeyData(ctx, keyID, p.thisNodeID, keyDataBytes); err != nil {
+		log.Error().
+			Err(err).
+			Str("key_id", keyID).
+			Str("node_id", p.thisNodeID).
+			Msg("Failed to store LocalPartySaveData")
+		return nil, errors.Wrap(err, "failed to store LocalPartySaveData")
+	}
+	log.Info().
+		Str("key_id", keyID).
+		Str("node_id", p.thisNodeID).
+		Msg("LocalPartySaveData stored successfully")
 
 	// 返回当前节点的KeyShare（在map中）
 	keyShares := make(map[string]*KeyShare)
@@ -164,32 +166,95 @@ func (p *GG18Protocol) GenerateKeyShare(ctx context.Context, req *KeyGenRequest)
 
 // ThresholdSign 阈值签名（使用 tss-lib 的真实签名协议）
 func (p *GG18Protocol) ThresholdSign(ctx context.Context, sessionID string, req *SignRequest) (*SignResponse, error) {
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("this_node_id", p.thisNodeID).
+		Str("session_id", sessionID).
+		Msg("🔍 [DIAGNOSTIC] ThresholdSign: method called")
+
 	if err := p.ValidateSignRequest(req); err != nil {
+		log.Error().
+			Err(err).
+			Str("key_id", req.KeyID).
+			Str("this_node_id", p.thisNodeID).
+			Msg("🔍 [DIAGNOSTIC] ThresholdSign: validation failed")
 		return nil, errors.Wrap(err, "invalid sign request")
 	}
 
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("this_node_id", p.thisNodeID).
+		Msg("🔍 [DIAGNOSTIC] ThresholdSign: calling getKeyRecord")
+
 	// 获取密钥记录（优先从内存，如果不存在则从 keyShareStorage 加载）
 	record, ok := p.getKeyRecord(req.KeyID)
+
+	log.Info().
+		Str("key_id", req.KeyID).
+		Str("this_node_id", p.thisNodeID).
+		Bool("found_in_memory", ok).
+		Msg("🔍 [DIAGNOSTIC] ThresholdSign: getKeyRecord returned")
 	if !ok {
 		// 内存中没有，尝试从 keyShareStorage 加载
+		log.Info().
+			Str("key_id", req.KeyID).
+			Str("this_node_id", p.thisNodeID).
+			Bool("keyShareStorage_nil", p.keyShareStorage == nil).
+			Msg("🔍 [DIAGNOSTIC] ThresholdSign: key not in memory, checking keyShareStorage")
+
 		if p.keyShareStorage != nil {
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: keyShareStorage is not nil, calling GetKeyData")
+
 			keyDataBytes, err := p.keyShareStorage.GetKeyData(ctx, req.KeyID, p.thisNodeID)
 			if err != nil {
+				log.Error().
+					Err(err).
+					Str("key_id", req.KeyID).
+					Str("this_node_id", p.thisNodeID).
+					Msg("🔍 [DIAGNOSTIC] ThresholdSign: GetKeyData failed")
 				return nil, errors.Wrapf(err, "key %s not found in memory or storage", req.KeyID)
 			}
+
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Int("key_data_bytes", len(keyDataBytes)).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: GetKeyData succeeded, deserializing LocalPartySaveData")
 
 			// 反序列化 LocalPartySaveData
 			keyData, err := deserializeLocalPartySaveData(keyDataBytes)
 			if err != nil {
+				log.Error().
+					Err(err).
+					Str("key_id", req.KeyID).
+					Str("this_node_id", p.thisNodeID).
+					Msg("🔍 [DIAGNOSTIC] ThresholdSign: failed to deserialize LocalPartySaveData")
 				return nil, errors.Wrap(err, "failed to deserialize LocalPartySaveData")
 			}
+
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: LocalPartySaveData deserialized successfully")
 
 			// 从密钥元数据获取公钥（需要从 keyService 获取，但这里我们没有 keyService）
 			// 暂时从 keyData 中提取公钥
 			ecdsaPubKey := keyData.ECDSAPub.ToECDSAPubKey()
 			if ecdsaPubKey == nil {
+				log.Error().
+					Str("key_id", req.KeyID).
+					Str("this_node_id", p.thisNodeID).
+					Msg("🔍 [DIAGNOSTIC] ThresholdSign: failed to extract public key from LocalPartySaveData")
 				return nil, errors.New("failed to extract public key from LocalPartySaveData")
 			}
+
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: public key extracted successfully, creating key record")
 
 			var pubKeyBytes []byte
 			if ecdsaPubKey.Y.Bit(0) == 0 {
@@ -208,22 +273,27 @@ func (p *GG18Protocol) ThresholdSign(ctx context.Context, sessionID string, req 
 			}
 			pubKeyHex := hex.EncodeToString(pubKeyBytes)
 
-			publicKey := &PublicKey{
-				Bytes: pubKeyBytes,
-				Hex:   pubKeyHex,
-			}
-
 			// 创建密钥记录并保存到内存
 			record = &gg18KeyRecord{
 				KeyData:    keyData,
-				PublicKey:  publicKey,
+				PublicKey:  &PublicKey{Bytes: pubKeyBytes, Hex: pubKeyHex},
 				Threshold:  0, // 这些信息需要从密钥元数据获取，暂时使用默认值
 				TotalNodes: 0,
 				NodeIDs:    nil,
 			}
 			p.saveKeyRecord(req.KeyID, record)
+
+			log.Info().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Str("public_key", pubKeyHex).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: key record created and saved to memory")
 		} else {
-			return nil, errors.Errorf("key %s not found", req.KeyID)
+			log.Error().
+				Str("key_id", req.KeyID).
+				Str("this_node_id", p.thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] ThresholdSign: keyShareStorage is nil, cannot load key from storage")
+			return nil, errors.Errorf("key %s not found in memory and keyShareStorage is nil", req.KeyID)
 		}
 	}
 
@@ -346,8 +416,8 @@ func (p *GG18Protocol) ProcessIncomingKeygenMessage(ctx context.Context, session
 }
 
 // ProcessIncomingSigningMessage 处理接收到的签名消息
-func (p *GG18Protocol) ProcessIncomingSigningMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte) error {
-	return p.partyManager.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, msgBytes)
+func (p *GG18Protocol) ProcessIncomingSigningMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte, isBroadcast bool) error {
+	return p.partyManager.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, msgBytes, isBroadcast)
 }
 
 // SupportedProtocols 支持的协议

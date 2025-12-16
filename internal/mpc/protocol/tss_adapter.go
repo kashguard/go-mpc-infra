@@ -1676,9 +1676,18 @@ func (m *tssPartyManager) executeEdDSASigning(
 	ctxTSS := tss.NewPeerContext(parties)
 	params := tss.NewParameters(tss.Edwards(), ctxTSS, thisPartyID, len(parties), len(parties)-1)
 
-	// 计算消息哈希
-	hash := sha256.Sum256(message)
-	msgBigInt := new(big.Int).SetBytes(hash[:])
+	// 使用原始消息（tss-lib v0.1 已支持标准 Ed25519，内部会使用 SHA-512）
+	// 注意：tss-lib v0.1 已修改为支持标准 Ed25519，不再需要 SHA-256 哈希
+	// 重要：使用 fullBytesLen 参数确保消息的完整长度（包括前导零）被正确保留
+	msgBigInt := new(big.Int).SetBytes(message)
+	messageLen := len(message)
+
+	log.Debug().
+		Str("session_id", sessionID).
+		Int("message_length", messageLen).
+		Str("message_hex", hex.EncodeToString(message)).
+		Str("msg_big_int", msgBigInt.String()).
+		Msg("🔍 [DIAGNOSTIC] executeEdDSASigning: message preparation for EdDSA signing")
 
 	// 创建消息通道
 	outCh := make(chan tss.Message, len(parties))
@@ -1686,7 +1695,8 @@ func (m *tssPartyManager) executeEdDSASigning(
 	errCh := make(chan *tss.Error, 1)
 
 	// 创建 EdDSA LocalParty（FROST 使用 EdDSA signing，2 轮）
-	party := eddsaSigning.NewLocalParty(msgBigInt, params, *keyData, outCh, endCh)
+	// 传递 fullBytesLen 参数以确保消息的完整长度（包括前导零）被正确保留
+	party := eddsaSigning.NewLocalParty(msgBigInt, params, *keyData, outCh, endCh, messageLen)
 
 	m.mu.Lock()
 	if localParty, ok := party.(*eddsaSigning.LocalParty); ok {
@@ -1694,27 +1704,163 @@ func (m *tssPartyManager) executeEdDSASigning(
 	}
 	// 记录会话ID映射
 	m.sessionIDMap[sessionID] = sessionID
+
+	// 创建消息队列（如果不存在）
+	// 重要：队列必须在启动 LocalParty 之前创建，这样 ProcessIncomingSigningMessage 才能及时找到队列
+	var messageQueueForProcessing chan *incomingMessage
+	existingMsgCh, exists := m.incomingSigningMessages[sessionID]
+	if !exists {
+		log.Info().
+			Str("session_id", sessionID).
+			Str("this_node_id", thisNodeID).
+			Msg("🔍 [DIAGNOSTIC] executeEdDSASigning: creating new message queue")
+		messageQueueForProcessing = make(chan *incomingMessage, 100)
+		m.incomingSigningMessages[sessionID] = messageQueueForProcessing
+	} else {
+		log.Info().
+			Str("session_id", sessionID).
+			Str("this_node_id", thisNodeID).
+			Msg("🔍 [DIAGNOSTIC] executeEdDSASigning: using existing message queue")
+		messageQueueForProcessing = existingMsgCh
+	}
 	m.mu.Unlock()
 
 	// 启动协议
 	go func() {
+		log.Info().
+			Str("session_id", sessionID).
+			Str("this_node_id", thisNodeID).
+			Msg("🔍 [DIAGNOSTIC] Starting EdDSA signing party")
 		if err := party.Start(); err != nil {
+			log.Error().
+				Err(err).
+				Str("session_id", sessionID).
+				Str("this_node_id", thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] EdDSA signing party.Start() failed")
 			errCh <- err
+		} else {
+			log.Info().
+				Str("session_id", sessionID).
+				Str("this_node_id", thisNodeID).
+				Msg("🔍 [DIAGNOSTIC] EdDSA signing party.Start() completed successfully")
 		}
 	}()
 
-	// 处理消息和结果（FROST 2 轮，超时时间可以更短）
+	// 启动消息处理循环：从队列读取消息并注入到party
+	go func() {
+		log.Info().
+			Str("session_id", sessionID).
+			Str("this_node_id", thisNodeID).
+			Msg("🔍 [DIAGNOSTIC] Starting message processing loop for EdDSA signing")
+
+		messageCount := 0
+		msgCh := messageQueueForProcessing
+
+		for {
+			// 如果队列为 nil，从 map 获取
+			if msgCh == nil {
+				m.mu.RLock()
+				msgCh, _ = m.incomingSigningMessages[sessionID]
+				m.mu.RUnlock()
+				if msgCh == nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case incomingMsg, ok := <-msgCh:
+				if !ok {
+					// 队列被关闭，尝试从 map 重新获取队列
+					m.mu.RLock()
+					msgCh, _ = m.incomingSigningMessages[sessionID]
+					m.mu.RUnlock()
+					if msgCh == nil {
+						return
+					}
+					continue
+				}
+
+				messageCount++
+				log.Debug().
+					Str("session_id", sessionID).
+					Str("from_node_id", incomingMsg.fromNodeID).
+					Int("message_count", messageCount).
+					Msg("🔍 [DIAGNOSTIC] Processing incoming EdDSA signing message")
+
+				// 获取 LocalParty 实例
+				m.mu.RLock()
+				localParty, exists := m.activeEdDSASigning[sessionID]
+				m.mu.RUnlock()
+
+				if !exists {
+					log.Warn().
+						Str("session_id", sessionID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Msg("🔍 [DIAGNOSTIC] Active EdDSA signing party not found, skipping message")
+					continue
+				}
+
+				// 获取发送方的 PartyID
+				fromPartyID, ok := m.nodeIDToPartyID[incomingMsg.fromNodeID]
+				if !ok {
+					log.Warn().
+						Str("session_id", sessionID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Msg("🔍 [DIAGNOSTIC] PartyID not found for from_node_id, message will be ignored")
+					continue
+				}
+
+				// 使用 UpdateFromBytes 将消息注入到 party
+				ok, tssErr := localParty.UpdateFromBytes(incomingMsg.msgBytes, fromPartyID, incomingMsg.isBroadcast)
+				if !ok || tssErr != nil {
+					log.Error().
+						Interface("tss_error", tssErr).
+						Str("session_id", sessionID).
+						Str("from_node_id", incomingMsg.fromNodeID).
+						Msg("🔍 [DIAGNOSTIC] Failed to update EdDSA signing party from message")
+					// 继续处理其他消息，不返回错误
+				}
+			}
+		}
+	}()
+
+	// 处理消息和结果（FROST 2 轮）
 	timeout := time.NewTimer(opts.Timeout)
 	defer timeout.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			m.mu.Lock()
+			delete(m.activeEdDSASigning, sessionID)
+			if ch, ok := m.incomingSigningMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingSigningMessages, sessionID)
+			}
+			m.mu.Unlock()
 			return nil, ctx.Err()
 		case <-timeout.C:
+			m.mu.Lock()
+			delete(m.activeEdDSASigning, sessionID)
+			if ch, ok := m.incomingSigningMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingSigningMessages, sessionID)
+			}
+			m.mu.Unlock()
 			return nil, errors.Errorf("%s signing timeout", opts.ProtocolName)
 		case msg := <-outCh:
 			// 路由消息到其他节点
+			targetNodes := msg.GetTo()
+			isBroadcast := len(targetNodes) == 0
+			log.Info().
+				Str("session_id", sessionID).
+				Str("this_node_id", thisNodeID).
+				Int("target_count", len(targetNodes)).
+				Bool("is_broadcast", isBroadcast).
+				Msg("🔍 [DIAGNOSTIC] Received message from EdDSA signing outCh, routing to other nodes")
 			if m.messageRouter != nil {
 				// 获取会话ID
 				m.mu.RLock()
@@ -1724,20 +1870,70 @@ func (m *tssPartyManager) executeEdDSASigning(
 				}
 				m.mu.RUnlock()
 
-				// 路由到所有目标节点
-				for _, to := range msg.GetTo() {
-					targetNodeID, ok := m.getNodeID(to.Id)
-					if !ok {
-						return nil, errors.Errorf("party ID to node ID mapping not found: %s", to.Id)
+				if isBroadcast {
+					// 广播消息：发送给所有其他节点
+					m.mu.RLock()
+					allPartyIDs := make([]*tss.PartyID, 0, len(m.nodeIDToPartyID))
+					for nodeID, partyID := range m.nodeIDToPartyID {
+						if nodeID != thisNodeID {
+							allPartyIDs = append(allPartyIDs, partyID)
+						}
 					}
-					if err := m.messageRouter(currentSessionID, targetNodeID, msg, false); err != nil {
-						return nil, errors.Wrapf(err, "route message to node %s", targetNodeID)
+					m.mu.RUnlock()
+
+					log.Info().
+						Str("session_id", sessionID).
+						Str("this_node_id", thisNodeID).
+						Int("target_count", len(allPartyIDs)).
+						Msg("🔍 [DIAGNOSTIC] Broadcasting EdDSA signing message to all nodes")
+
+					for _, partyID := range allPartyIDs {
+						targetNodeID, ok := m.partyIDToNodeID[partyID.Id]
+						if !ok {
+							log.Error().
+								Str("party_id", partyID.Id).
+								Str("session_id", sessionID).
+								Msg("🔍 [DIAGNOSTIC] Failed to find nodeID for partyID in broadcast")
+							continue
+						}
+						log.Debug().
+							Str("session_id", sessionID).
+							Str("target_node_id", targetNodeID).
+							Str("party_id", partyID.Id).
+							Msg("🔍 [DIAGNOSTIC] Broadcasting EdDSA signing message to node")
+						if err := m.messageRouter(currentSessionID, targetNodeID, msg, true); err != nil {
+							return nil, errors.Wrapf(err, "broadcast message to node %s", targetNodeID)
+						}
+					}
+				} else {
+					// 点对点消息：路由到指定目标节点
+					for _, to := range targetNodes {
+						targetNodeID, ok := m.getNodeID(to.Id)
+						if !ok {
+							return nil, errors.Errorf("party ID to node ID mapping not found: %s", to.Id)
+						}
+						log.Debug().
+							Str("session_id", sessionID).
+							Str("target_node_id", targetNodeID).
+							Str("party_id", to.Id).
+							Msg("🔍 [DIAGNOSTIC] Routing EdDSA signing message to target node")
+						if err := m.messageRouter(currentSessionID, targetNodeID, msg, false); err != nil {
+							return nil, errors.Wrapf(err, "route message to node %s", targetNodeID)
+						}
 					}
 				}
+			} else {
+				log.Warn().
+					Str("session_id", sessionID).
+					Msg("🔍 [DIAGNOSTIC] Message router is nil, cannot route EdDSA signing message")
 			}
 		case sigData := <-endCh:
 			m.mu.Lock()
 			delete(m.activeEdDSASigning, sessionID)
+			if ch, ok := m.incomingSigningMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingSigningMessages, sessionID)
+			}
 			m.mu.Unlock()
 			if sigData == nil {
 				return nil, errors.Errorf("%s signing returned nil signature data", opts.ProtocolName)
@@ -1746,6 +1942,10 @@ func (m *tssPartyManager) executeEdDSASigning(
 		case err := <-errCh:
 			m.mu.Lock()
 			delete(m.activeEdDSASigning, sessionID)
+			if ch, ok := m.incomingSigningMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingSigningMessages, sessionID)
+			}
 			m.mu.Unlock()
 			if opts.EnableIdentifiableAbort && err.Culprits() != nil {
 				return nil, errors.Wrapf(err, "%s signing error (identifiable abort: %v)", opts.ProtocolName, err.Culprits())
@@ -1758,7 +1958,7 @@ func (m *tssPartyManager) executeEdDSASigning(
 // FROSTSigningOptions 返回 FROST 的签名选项
 func FROSTSigningOptions() SigningOptions {
 	return SigningOptions{
-		Timeout:                 1 * time.Minute, // FROST 2 轮，超时时间更短
+		Timeout:                 5 * time.Minute, // FROST 2 轮，但需要足够时间处理消息传递
 		EnableIdentifiableAbort: false,           // FROST 不支持可识别的中止
 		ProtocolName:            "FROST",
 	}

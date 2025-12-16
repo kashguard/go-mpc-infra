@@ -22,11 +22,48 @@ func NewManager(metadataStore storage.MetadataStore, heartbeatInterval time.Dura
 	}
 }
 
+// RegisterClientNode 注册客户端节点（用于备份）
+func (m *Manager) RegisterClientNode(ctx context.Context, userID string, publicKey string, metadata map[string]interface{}) (*Node, error) {
+	if userID == "" {
+		return nil, errors.New("userID is required")
+	}
+
+	nodeID := "client-" + userID
+	node := &Node{
+		NodeID:       nodeID,
+		NodeType:     string(NodeTypeClient),
+		Purpose:      string(NodePurposeBackup),
+		Endpoint:     "", // 客户端节点不需要端点
+		PublicKey:    publicKey,
+		Status:       string(NodeStatusActive),
+		Capabilities: []string{"backup"},
+		Metadata:     metadata,
+		RegisteredAt: time.Now(),
+	}
+
+	if err := m.RegisterNode(ctx, node); err != nil {
+		return nil, errors.Wrap(err, "failed to register client node")
+	}
+
+	return node, nil
+}
+
 // RegisterNode 注册节点
 func (m *Manager) RegisterNode(ctx context.Context, node *Node) error {
+	// 设置默认 purpose
+	purpose := node.Purpose
+	if purpose == "" {
+		if node.NodeType == string(NodeTypeClient) {
+			purpose = string(NodePurposeBackup)
+		} else {
+			purpose = string(NodePurposeSigning)
+		}
+	}
+
 	nodeInfo := &storage.NodeInfo{
 		NodeID:       node.NodeID,
 		NodeType:     node.NodeType,
+		Purpose:      purpose,
 		Endpoint:     node.Endpoint,
 		PublicKey:    node.PublicKey,
 		Status:       string(node.Status),
@@ -52,6 +89,7 @@ func (m *Manager) GetNode(ctx context.Context, nodeID string) (*Node, error) {
 	return &Node{
 		NodeID:        nodeInfo.NodeID,
 		NodeType:      nodeInfo.NodeType,
+		Purpose:       nodeInfo.Purpose,
 		Endpoint:      nodeInfo.Endpoint,
 		PublicKey:     nodeInfo.PublicKey,
 		Status:        nodeInfo.Status,
@@ -74,6 +112,7 @@ func (m *Manager) ListNodes(ctx context.Context, filter *storage.NodeFilter) ([]
 		nodes[i] = &Node{
 			NodeID:        nodeInfo.NodeID,
 			NodeType:      nodeInfo.NodeType,
+			Purpose:       nodeInfo.Purpose,
 			Endpoint:      nodeInfo.Endpoint,
 			PublicKey:     nodeInfo.PublicKey,
 			Status:        nodeInfo.Status,
@@ -95,9 +134,20 @@ func (m *Manager) UpdateNodeStatus(ctx context.Context, nodeID string, status No
 	}
 
 	node.Status = string(status)
+	// 设置默认 purpose
+	purpose := node.Purpose
+	if purpose == "" {
+		if node.NodeType == string(NodeTypeClient) {
+			purpose = string(NodePurposeBackup)
+		} else {
+			purpose = string(NodePurposeSigning)
+		}
+	}
+
 	nodeInfo := &storage.NodeInfo{
 		NodeID:        node.NodeID,
 		NodeType:      node.NodeType,
+		Purpose:       purpose,
 		Endpoint:      node.Endpoint,
 		PublicKey:     node.PublicKey,
 		Status:        node.Status,
