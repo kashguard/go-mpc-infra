@@ -73,7 +73,7 @@ sequenceDiagram
         Operator-->>User: 交易失败
     else 验证成功
         Note over Guardian: 加载 Share 2
-        Operator<->Guardian: 5. 执行 MPC 签名协议 (2-of-3)
+        Operator->>Guardian: 5. 执行 MPC 签名协议 (2-of-3)
         Note right of Guardian: 生成最终链上签名 (Signature)
     end
 
