@@ -19,6 +19,9 @@ type Engine interface {
 	// 密钥轮换
 	RotateKey(ctx context.Context, keyID string) error
 
+	// 执行密钥轮换（Resharing）
+	ExecuteResharing(ctx context.Context, keyID string, oldNodeIDs []string, newNodeIDs []string, oldThreshold int, newThreshold int) (*KeyGenResponse, error)
+
 	// 处理接收到的DKG消息
 	ProcessIncomingKeygenMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte, isBroadcast bool) error
 

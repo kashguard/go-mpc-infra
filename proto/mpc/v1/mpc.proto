@@ -6,8 +6,8 @@ option go_package = "github.com/kashguard/go-mpc-wallet/internal/pb/mpc/v1";
 
 // MPC核心服务定义
 service MPCNode {
-  // 双向流：加入签名会话
-  rpc JoinSigningSession(stream SessionMessage) returns (stream SessionMessage);
+  // 提交协议消息
+  rpc SubmitProtocolMessage(SubmitProtocolMessageRequest) returns (SubmitProtocolMessageResponse);
 
   // 启动 DKG（由协调者调用参与者）
   rpc StartDKG(StartDKGRequest) returns (StartDKGResponse);
@@ -15,8 +15,8 @@ service MPCNode {
   // 启动签名（由协调者调用参与者）
   rpc StartSign(StartSignRequest) returns (StartSignResponse);
 
-  // 提交签名分片
-  rpc SubmitSignatureShare(ShareRequest) returns (ShareResponse);
+  // 启动密钥轮换（Resharing）（由协调者调用参与者）
+  rpc StartResharing(StartResharingRequest) returns (StartResharingResponse);
 
   // 心跳检测
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -70,16 +70,17 @@ message SessionStatusResponse {
   int32 duration_ms = 9;
 }
 
-// 签名分片相关消息
-message ShareRequest {
+// 协议消息请求
+message SubmitProtocolMessageRequest {
   string session_id = 1;
   string node_id = 2;
-  bytes share_data = 3;
+  bytes data = 3;
   int32 round = 4;
   string timestamp = 5;
 }
 
-message ShareResponse {
+// 协议消息响应
+message SubmitProtocolMessageResponse {
   bool accepted = 1;
   string message = 2;
   int32 next_round = 3;
@@ -120,6 +121,21 @@ message StartSignResponse {
   string message = 2;
 }
 
+// 启动密钥轮换 请求/响应
+message StartResharingRequest {
+  string session_id = 1;      // 会话ID (通常等于 key_id)
+  string key_id = 2;          // 目标密钥ID
+  repeated string old_node_ids = 3; // 旧参与节点列表
+  repeated string new_node_ids = 4; // 新参与节点列表
+  int32 old_threshold = 5;
+  int32 new_threshold = 6;
+}
+
+message StartResharingResponse {
+  bool started = 1;
+  string message = 2;
+}
+
 // 签名聚合相关消息
 message AggregateRequest {
   string session_id = 1;
@@ -131,65 +147,6 @@ message AggregateResponse {
   string public_key = 3; // hex encoded
   string message_hash = 4;
   string aggregated_at = 5;
-}
-
-// 双向流消息
-message SessionMessage {
-  oneof message_type {
-    // 客户端 -> 服务端
-    JoinRequest join_request = 1;
-    ShareMessage share_message = 2;
-    HeartbeatRequest heartbeat_request = 3;
-
-    // 服务端 -> 客户端
-    SessionConfirmation confirmation = 4;
-    RoundMessage round_message = 5;
-    CompletionMessage completion_message = 6;
-    ErrorMessage error_message = 7;
-  }
-}
-
-message JoinRequest {
-  string session_id = 1;
-  string node_id = 2;
-  string joined_at = 3;
-}
-
-message ShareMessage {
-  bytes share_data = 1;
-  int32 round = 2;
-  string submitted_at = 3;
-}
-
-message SessionConfirmation {
-  string session_id = 1;
-  string status = 2;
-  int32 threshold = 3;
-  int32 total_nodes = 4;
-  repeated string participants = 5;
-  int32 current_round = 6;
-  string confirmed_at = 7;
-}
-
-message RoundMessage {
-  int32 round = 1;
-  string round_type = 2;  // "dkg", "sign"
-  bytes message_data = 3;
-  repeated string target_nodes = 4;
-  string sent_at = 5;
-}
-
-message CompletionMessage {
-  string signature = 1;
-  string public_key = 2;
-  string completed_at = 6;
-}
-
-message ErrorMessage {
-  string error_code = 1;
-  string error_message = 2;
-  bool recoverable = 3;
-  string occurred_at = 4;
 }
 
 // 心跳消息

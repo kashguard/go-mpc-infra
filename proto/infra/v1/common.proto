@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package infra.v1;
+
+option go_package = "github.com/kashguard/go-mpc-wallet/internal/pb/infra/v1";
+
+// 通用响应消息
+message StatusResponse {
+  bool success = 1;
+  string message = 2;
+  string error_code = 3;
+}
+
+// 分页请求
+message PaginationRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+
+// 分页响应
+message PaginationResponse {
+  int32 total = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+

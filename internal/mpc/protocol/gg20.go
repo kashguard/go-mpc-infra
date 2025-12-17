@@ -3,9 +3,11 @@ package protocol
 import (
 	"context"
 	"encoding/hex"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/kashguard/tss-lib/ecdsa/keygen"
 	"github.com/kashguard/tss-lib/tss"
 	"github.com/pkg/errors"
 )
@@ -136,7 +138,11 @@ func (p *GG20Protocol) ThresholdSign(ctx context.Context, sessionID string, req 
 		req.NodeIDs,
 		p.thisNodeID,
 		keyData,
-		GG20SigningOptions(),
+		TSSSigningOptions{
+			Timeout:                 1 * time.Minute,
+			EnableIdentifiableAbort: true,
+			ProtocolName:            "GG20",
+		},
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "execute GG20 signing")
@@ -194,7 +200,121 @@ func (p *GG20Protocol) ProcessIncomingSigningMessage(ctx context.Context, sessio
 	return p.GG18Protocol.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, msgBytes, isBroadcast)
 }
 
-// RotateKey 密钥轮换（复用GG18的实现）
+// RotateKey 密钥轮换（Resharing）
 func (p *GG20Protocol) RotateKey(ctx context.Context, keyID string) error {
-	return p.GG18Protocol.RotateKey(ctx, keyID)
+	// 1. 获取旧的密钥数据
+	record, ok := p.getKeyRecord(keyID)
+	if !ok {
+		// 尝试从存储加载
+		if p.keyShareStorage != nil {
+			keyDataBytes, err := p.keyShareStorage.GetKeyData(ctx, keyID, p.thisNodeID)
+			if err != nil {
+				return errors.Wrapf(err, "key %s not found in memory or storage", keyID)
+			}
+			keyData, err := deserializeLocalPartySaveData(keyDataBytes)
+			if err != nil {
+				return errors.Wrap(err, "failed to deserialize key data")
+			}
+			// 重构 record (简化，仅用于 RotateKey)
+			record = &gg18KeyRecord{
+				KeyData:    keyData,
+				TotalNodes: len(keyData.Ks),     // 从 LocalPreParams 推断
+				Threshold:  len(keyData.Ks) - 1, // 粗略推断，实际上 Threshold 不直接存储在 keyData 中
+				NodeIDs:    nil,                 // 需要从外部传入或推断，Resharing通常需要显式的 old/new party ID 列表
+			}
+			// 注意：这里没有完整的 record 信息（如 NodeIDs），可能需要从其他地方获取
+			// 但 executeResharing 需要 NodeIDs
+		} else {
+			return errors.Errorf("key %s not found", keyID)
+		}
+	}
+	_ = record // Suppress unused variable error until implementation is complete
+
+	// TODO: RotateKey 接口定义目前只接受 keyID，这不足以支持 Resharing
+	// Resharing 需要 NewNodeIDs, NewThreshold 等参数
+	// 我们需要扩展 Engine 接口或提供特定于 Resharing 的方法
+	// 暂时返回未实现错误，直到上层服务准备好传递所需参数
+	return errors.New("RotateKey requires extended parameters (NewNodeIDs, NewThreshold), please use ExecuteResharing instead")
+}
+
+// ExecuteResharing 执行密钥轮换
+func (p *GG20Protocol) ExecuteResharing(
+	ctx context.Context,
+	keyID string,
+	oldNodeIDs []string,
+	newNodeIDs []string,
+	oldThreshold int,
+	newThreshold int,
+) (*KeyGenResponse, error) {
+	// 1. 获取旧密钥数据
+	record, ok := p.getKeyRecord(keyID)
+	var keyData *keygen.LocalPartySaveData
+	if ok {
+		keyData = record.KeyData
+	} else {
+		// 从存储加载
+		if p.keyShareStorage == nil {
+			return nil, errors.New("key storage is nil")
+		}
+		dataBytes, err := p.keyShareStorage.GetKeyData(ctx, keyID, p.thisNodeID)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to load key data")
+		}
+		keyData, err = deserializeLocalPartySaveData(dataBytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to deserialize key data")
+		}
+	}
+
+	// 2. 执行 Resharing
+	newKeyData, err := p.partyManager.executeResharing(
+		ctx,
+		keyID,
+		oldNodeIDs,
+		newNodeIDs,
+		oldThreshold,
+		newThreshold,
+		p.thisNodeID,
+		keyData,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "execute resharing failed")
+	}
+
+	// 3. 处理结果
+	keyShare, publicKey, err := convertTSSKeyData(keyID, newKeyData, p.thisNodeID)
+	if err != nil {
+		return nil, errors.Wrap(err, "convert key data failed")
+	}
+
+	// 4. 更新本地记录
+	newRecord := &gg18KeyRecord{
+		KeyData:    newKeyData,
+		PublicKey:  publicKey,
+		Threshold:  newThreshold,
+		TotalNodes: len(newNodeIDs),
+		NodeIDs:    newNodeIDs,
+	}
+	p.saveKeyRecord(keyID, newRecord)
+
+	// 5. 持久化新分片
+	if p.keyShareStorage != nil {
+		bytes, err := serializeLocalPartySaveData(newKeyData)
+		if err != nil {
+			return nil, errors.Wrap(err, "serialize new key data failed")
+		}
+		if err := p.keyShareStorage.StoreKeyData(ctx, keyID, p.thisNodeID, bytes); err != nil {
+			return nil, errors.Wrap(err, "store new key data failed")
+		}
+	}
+
+	return &KeyGenResponse{
+		KeyShares: map[string]*KeyShare{p.thisNodeID: keyShare},
+		PublicKey: publicKey,
+	}, nil
+}
+
+// ProcessIncomingResharingMessage 处理接收到的 Resharing 消息
+func (p *GG20Protocol) ProcessIncomingResharingMessage(ctx context.Context, sessionID string, fromNodeID string, msgBytes []byte, isBroadcast bool) error {
+	return p.partyManager.ProcessIncomingResharingMessage(ctx, sessionID, fromNodeID, msgBytes, isBroadcast)
 }

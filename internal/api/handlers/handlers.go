@@ -6,7 +6,7 @@ import (
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/auth"
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/common"
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/mpc/keys"
-	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/mpc/nodes"
+	// "github.com/kashguard/go-mpc-wallet/internal/api/handlers/mpc/nodes"
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/mpc/sessions"
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/mpc/signing"
 	"github.com/kashguard/go-mpc-wallet/internal/api/handlers/push"
@@ -37,10 +37,10 @@ func AttachAllRoutes(s *api.Server) {
 		keys.GetListKeysRoute(s),
 		keys.PostCreateKeyRoute(s),
 		keys.PostGenerateAddressRoute(s),
-		nodes.GetListNodesRoute(s),
-		nodes.GetNodeHealthRoute(s),
-		nodes.GetNodeRoute(s),
-		nodes.PostRegisterNodeRoute(s),
+		// nodes.GetListNodesRoute(s),
+		// nodes.GetNodeHealthRoute(s),
+		// nodes.GetNodeRoute(s),
+		// nodes.PostRegisterNodeRoute(s),
 		sessions.GetSessionRoute(s),
 		sessions.PostCancelSessionRoute(s),
 		sessions.PostCreateSessionRoute(s),

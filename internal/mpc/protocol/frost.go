@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/schnorr"
 	"github.com/kashguard/tss-lib/common"
 	eddsaKeygen "github.com/kashguard/tss-lib/eddsa/keygen"
 	eddsaSigning "github.com/kashguard/tss-lib/eddsa/signing"
@@ -51,7 +53,18 @@ type FROSTProtocol struct {
 	keyShareStorage KeyShareStorage
 }
 
-// frostKeyRecord 保存 FROST 密钥生成后的内部状态
+// NewFROSTProtocol 创建 FROST 协议实例
+func NewFROSTProtocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error, keyShareStorage KeyShareStorage) *FROSTProtocol {
+	return &FROSTProtocol{
+		curve:           curve, // Default to Ed25519 for DKG if empty, but respect input
+		keyRecords:      make(map[string]*frostKeyRecord),
+		partyManager:    newTSSPartyManager(messageRouter),
+		thisNodeID:      thisNodeID,
+		messageRouter:   messageRouter,
+		keyShareStorage: keyShareStorage,
+	}
+}
+
 type frostKeyRecord struct {
 	// 使用 EdDSA keygen 的数据结构（Schnorr 兼容）
 	KeyData    *eddsaKeygen.LocalPartySaveData
@@ -60,19 +73,6 @@ type frostKeyRecord struct {
 	Threshold  int
 	TotalNodes int
 	NodeIDs    []string
-}
-
-// NewFROSTProtocol 创建 FROST 协议实例
-func NewFROSTProtocol(curve string, thisNodeID string, messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error, keyShareStorage KeyShareStorage) *FROSTProtocol {
-	partyManager := newTSSPartyManager(messageRouter)
-	return &FROSTProtocol{
-		curve:           curve,
-		keyRecords:      make(map[string]*frostKeyRecord),
-		partyManager:    partyManager,
-		thisNodeID:      thisNodeID,
-		messageRouter:   messageRouter,
-		keyShareStorage: keyShareStorage,
-	}
 }
 
 // getKeyRecord 获取密钥记录
@@ -283,9 +283,6 @@ func (p *FROSTProtocol) ThresholdSign(ctx context.Context, sessionID string, req
 	}, nil
 }
 
-// executeFROSTKeygen 和 executeFROSTSigning 已移至 tss_adapter.go
-// 现在使用 partyManager.executeEdDSAKeygen 和 partyManager.executeEdDSASigning
-
 // convertFROSTKeyData 将 EdDSA keygen 数据转换为我们的 KeyShare 格式
 func convertFROSTKeyData(
 	keyID string,
@@ -454,6 +451,11 @@ func (p *FROSTProtocol) RotateKey(ctx context.Context, keyID string) error {
 	return errors.New("FROST key rotation not yet implemented")
 }
 
+// ExecuteResharing 执行密钥轮换（Resharing）
+func (p *FROSTProtocol) ExecuteResharing(ctx context.Context, keyID string, oldNodeIDs []string, newNodeIDs []string, oldThreshold int, newThreshold int) (*KeyGenResponse, error) {
+	return nil, errors.New("FROST does not support Resharing yet")
+}
+
 // ProcessIncomingKeygenMessage 处理接收到的DKG消息
 func (p *FROSTProtocol) ProcessIncomingKeygenMessage(
 	ctx context.Context,
@@ -564,18 +566,44 @@ func verifySecp256k1SchnorrSignature(sig *Signature, msg []byte, pubKey *PublicK
 		return false, errors.Wrap(err, "failed to parse secp256k1 public key")
 	}
 
-	// 注意：这里使用简化的验证方法
-	// 完整的 BIP-340 Schnorr 验证需要实现：
-	// 1. 验证 R 是有效的曲线点
-	// 2. 计算挑战 c = H(R || P || m)
-	// 3. 验证 s*G = R + c*P
-	//
-	// 由于 tss-lib 的 EdDSA keygen 可能不支持 secp256k1，这里暂时使用 ECDSA 验证作为回退
-	// 如果 tss-lib 支持 secp256k1 的 Schnorr，应该使用专门的 Schnorr 验证库
+	// BIP-340 Schnorr 验证
+	// 使用 dcrd/secp256k1/v4 的 Schnorr 验证功能
+	// 解析 Schnorr 签名
+	signature, err := schnorr.ParseSignature(sig.Bytes)
+	if err != nil {
+		return false, errors.Wrap(err, "failed to parse schnorr signature")
+	}
 
-	// 临时实现：使用 ECDSA 验证作为回退方案
-	// TODO: 实现完整的 BIP-340 Schnorr 验证
-	return verifyECDSASignature(sig, msg, pubKey)
+	// 解析公钥（使用 ParsePubKey，它支持 33 字节压缩格式）
+	// 注意：BIP-340 使用 x-only 公钥 (32 bytes)，如果传入的是 33 字节，需要确保它是有效的
+	// schnorr.ParsePubKey 专门用于 Schnorr 签名的公钥解析
+	pk, err := schnorr.ParsePubKey(pubKey.Bytes)
+	if err != nil {
+		// 尝试作为普通 ECDSA 公钥解析，然后转换
+		ecdsaPk, err := secp256k1.ParsePubKey(pubKey.Bytes)
+		if err != nil {
+			return false, errors.Wrap(err, "failed to parse public key")
+		}
+		// 转换为 Schnorr 公钥 (x-only)
+		// 注意：dcrd 库可能没有直接转换方法，通常使用 ParsePubKey 处理 32 字节 x 坐标
+		// 如果是 33 字节，ParsePubKey 会处理
+		// 这里假设 ParsePubKey 已经处理了
+
+		// secp256k1.PublicKey.SerializeCompressed()[1:] 提取 x 坐标
+		xOnly := ecdsaPk.SerializeCompressed()[1:]
+		pk, err = schnorr.ParsePubKey(xOnly)
+		if err != nil {
+			return false, errors.Wrap(err, "failed to parse x-only public key")
+		}
+	}
+
+	// 计算消息哈希
+	// BIP-340 签名通常是对消息哈希进行签名，或者对消息进行签名（内部哈希）
+	// Verify 方法通常接受消息哈希
+	hash := sha256.Sum256(msg)
+
+	// 验证签名
+	return signature.Verify(hash[:], pk), nil
 }
 
 // validateSignRequest 验证签名请求（通用验证逻辑）

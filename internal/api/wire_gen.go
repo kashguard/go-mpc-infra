@@ -8,15 +8,14 @@ package api
 
 import (
 	"database/sql"
+	"testing"
+
 	"github.com/google/wire"
 	"github.com/kashguard/go-mpc-wallet/internal/auth"
 	"github.com/kashguard/go-mpc-wallet/internal/config"
 	"github.com/kashguard/go-mpc-wallet/internal/data/local"
 	"github.com/kashguard/go-mpc-wallet/internal/metrics"
-	"testing"
-)
 
-import (
 	_ "github.com/lib/pq"
 )
 
@@ -65,7 +64,8 @@ func InitNewServer(server config.Server) (*Server, error) {
 	}
 	discovery := NewNodeDiscovery(manager, discoveryService)
 	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery, grpcClient, server)
-	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService)
+	sssBackupService := NewBackupService(metadataStore)
+	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService, sssBackupService)
 	client, err := NewRedisClient(server)
 	if err != nil {
 		return nil, err
@@ -79,7 +79,10 @@ func InitNewServer(server config.Server) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
+	recoveryService := NewRecoveryService(metadataStore, keyShareStorage, sssBackupService)
+	store := NewBackupStore(metadataStore)
+	infrastructureServer := NewInfrastructureServer(server, keyService, signingService, sssBackupService, recoveryService, store, manager)
+	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService, infrastructureServer)
 	return apiServer, nil
 }
 
@@ -122,7 +125,8 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 	}
 	discovery := NewNodeDiscovery(manager, discoveryService)
 	dkgService := NewDKGServiceProvider(metadataStore, keyShareStorage, engine, manager, discovery, grpcClient, server)
-	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService)
+	sssBackupService := NewBackupService(metadataStore)
+	keyService := NewKeyServiceProvider(metadataStore, keyShareStorage, engine, dkgService, sssBackupService)
 	client, err := NewRedisClient(server)
 	if err != nil {
 		return nil, err
@@ -136,7 +140,10 @@ func InitNewServerWithDB(server config.Server, db *sql.DB, t ...*testing.T) (*Se
 	if err != nil {
 		return nil, err
 	}
-	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService)
+	recoveryService := NewRecoveryService(metadataStore, keyShareStorage, sssBackupService)
+	store := NewBackupStore(metadataStore)
+	infrastructureServer := NewInfrastructureServer(server, keyService, signingService, sssBackupService, recoveryService, store, manager)
+	apiServer := newServerWithComponents(server, db, mailer, service, i18nService, clock, authService, localService, metricsService, keyService, signingService, coordinatorService, manager, registry, discovery, sessionManager, grpcServer, grpcClient, discoveryService, infrastructureServer)
 	return apiServer, nil
 }
 

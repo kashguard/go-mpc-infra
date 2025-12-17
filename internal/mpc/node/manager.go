@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/storage"
 	"github.com/pkg/errors"
 )
 

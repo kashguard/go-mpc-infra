@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package infra.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/kashguard/go-mpc-wallet/internal/pb/infra/v1;infra";
+
+// NodeService 节点管理服务
+service NodeService {
+    // 注册新节点
+    rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+    
+    // 节点心跳
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    
+    // 获取节点列表
+    rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+    
+    // 获取节点连接信息
+    rpc GetNodeConnectionInfo(GetNodeConnectionInfoRequest) returns (GetNodeConnectionInfoResponse);
+}
+
+message RegisterNodeRequest {
+    string device_id = 1;      // 设备唯一标识
+    string public_key = 2;     // 节点公钥 (用于 mTLS 或 签名)
+    string type = 3;           // 节点类型: "client", "server"
+    string version = 4;        // 客户端版本
+    map<string, string> metadata = 5; // 其他元数据
+}
+
+message RegisterNodeResponse {
+    string node_id = 1;        // 分配的节点ID (例如: client-{user_id})
+    string status = 2;         // 状态
+    google.protobuf.Timestamp registered_at = 3;
+}
+
+message HeartbeatRequest {
+    string node_id = 1;
+    string status = 2;         // "online", "busy", etc.
+}
+
+message HeartbeatResponse {
+    bool success = 1;
+    repeated string commands = 2; // 可选：返回给节点的指令
+}
+
+message ListNodesRequest {
+    string type = 1;           // 过滤类型
+    string status = 2;         // 过滤状态
+    int32 page_size = 3;
+    string page_token = 4;
+}
+
+message ListNodesResponse {
+    repeated NodeInfo nodes = 1;
+    string next_page_token = 2;
+}
+
+message GetNodeConnectionInfoRequest {
+    string node_id = 1;
+}
+
+message GetNodeConnectionInfoResponse {
+    string address = 1;        // IP:Port
+    string protocol = 2;       // "grpc", "http"
+    string public_key = 3;
+}
+
+message NodeInfo {
+    string node_id = 1;
+    string type = 2;
+    string status = 3;
+    string version = 4;
+    google.protobuf.Timestamp last_heartbeat = 5;
+    string address = 6;
+    map<string, string> metadata = 7;
+}

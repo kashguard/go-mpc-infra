@@ -7,9 +7,7 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
@@ -360,40 +358,6 @@ func (p *GG18Protocol) VerifySignature(ctx context.Context, sig *Signature, msg 
 
 // 辅助函数
 
-func generateKeyID() string {
-	return fmt.Sprintf("key-%d", time.Now().UnixNano())
-}
-
-func normalizeNodeIDs(ids []string, total int) ([]string, error) {
-	if len(ids) == 0 {
-		generated := make([]string, total)
-		for i := 0; i < total; i++ {
-			generated[i] = fmt.Sprintf("node-%02d", i+1)
-		}
-		return generated, nil
-	}
-	if len(ids) != total {
-		return nil, fmt.Errorf("node IDs count mismatch: expected %d, got %d", total, len(ids))
-	}
-	return ids, nil
-}
-
-func resolveMessagePayload(req *SignRequest) ([]byte, error) {
-	switch {
-	case len(req.Message) > 0:
-		return req.Message, nil
-	case req.MessageHex != "":
-		payload := strings.TrimPrefix(req.MessageHex, "0x")
-		msg, err := hex.DecodeString(payload)
-		if err != nil {
-			return nil, errors.Wrap(err, "invalid message hex")
-		}
-		return msg, nil
-	default:
-		return nil, errors.New("message payload is empty")
-	}
-}
-
 func verifyECDSASignature(sig *Signature, msg []byte, pubKey *PublicKey) (bool, error) {
 	if sig == nil || len(sig.Bytes) == 0 {
 		return false, errors.New("signature bytes missing")
@@ -427,6 +391,11 @@ func (p *GG18Protocol) RotateKey(ctx context.Context, keyID string) error {
 
 	// 临时实现：返回错误，提示需要实现
 	return errors.New("GG18 key rotation not yet implemented")
+}
+
+// ExecuteResharing 执行密钥轮换（Resharing）
+func (p *GG18Protocol) ExecuteResharing(ctx context.Context, keyID string, oldNodeIDs []string, newNodeIDs []string, oldThreshold int, newThreshold int) (*KeyGenResponse, error) {
+	return nil, errors.New("GG18 does not support Resharing yet")
 }
 
 // ProcessIncomingKeygenMessage 处理接收到的DKG消息

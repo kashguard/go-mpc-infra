@@ -129,6 +129,10 @@ type MPC struct {
 	TLSKeyFile    string // 服务器私钥文件路径
 	TLSCACertFile string // CA 证书文件路径（用于验证客户端证书）
 
+	// JWT 配置 (用于基础设施层鉴权)
+	JWTSecret   string
+	JWTDuration time.Duration
+
 	// KeepAlive 配置
 	KeepAlive      time.Duration // KeepAlive 时间间隔
 	MaxConnAge     time.Duration // 最大连接存活时间
@@ -312,6 +316,11 @@ func DefaultServiceConfigFromEnv() Server {
 			HTTPPort:              util.GetEnvAsInt("MPC_HTTP_PORT", 8080),
 			GRPCPort:              util.GetEnvAsInt("MPC_GRPC_PORT", 9090),
 			TLSEnabled:            util.GetEnvAsBool("MPC_TLS_ENABLED", true),
+			TLSCertFile:           util.GetEnv("MPC_TLS_CERT_FILE", ""),
+			TLSKeyFile:            util.GetEnv("MPC_TLS_KEY_FILE", ""),
+			TLSCACertFile:         util.GetEnv("MPC_TLS_CA_CERT_FILE", ""),
+			JWTSecret:             util.GetEnv("MPC_JWT_SECRET", "change-me-in-production"),
+			JWTDuration:           time.Minute * time.Duration(util.GetEnvAsInt("MPC_JWT_DURATION_MINUTES", 60)),
 			EnableAudit:           util.GetEnvAsBool("MPC_ENABLE_AUDIT", true),
 			EnablePolicy:          util.GetEnvAsBool("MPC_ENABLE_POLICY", true),
 			KeyRotationDays:       util.GetEnvAsInt("MPC_KEY_ROTATION_DAYS", 0),

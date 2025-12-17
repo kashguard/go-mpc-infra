@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v3.19.4
-// source: mpc/v1/mpc.proto
+// source: mpc.proto
 
 package v1
 
@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MPCNode_JoinSigningSession_FullMethodName   = "/mpc.v1.MPCNode/JoinSigningSession"
-	MPCNode_StartDKG_FullMethodName             = "/mpc.v1.MPCNode/StartDKG"
-	MPCNode_StartSign_FullMethodName            = "/mpc.v1.MPCNode/StartSign"
-	MPCNode_SubmitSignatureShare_FullMethodName = "/mpc.v1.MPCNode/SubmitSignatureShare"
-	MPCNode_Heartbeat_FullMethodName            = "/mpc.v1.MPCNode/Heartbeat"
+	MPCNode_SubmitProtocolMessage_FullMethodName = "/mpc.v1.MPCNode/SubmitProtocolMessage"
+	MPCNode_StartDKG_FullMethodName              = "/mpc.v1.MPCNode/StartDKG"
+	MPCNode_StartSign_FullMethodName             = "/mpc.v1.MPCNode/StartSign"
+	MPCNode_StartResharing_FullMethodName        = "/mpc.v1.MPCNode/StartResharing"
+	MPCNode_Heartbeat_FullMethodName             = "/mpc.v1.MPCNode/Heartbeat"
 )
 
 // MPCNodeClient is the client API for MPCNode service.
@@ -32,14 +32,14 @@ const (
 //
 // MPC核心服务定义
 type MPCNodeClient interface {
-	// 双向流：加入签名会话
-	JoinSigningSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionMessage, SessionMessage], error)
+	// 提交协议消息
+	SubmitProtocolMessage(ctx context.Context, in *SubmitProtocolMessageRequest, opts ...grpc.CallOption) (*SubmitProtocolMessageResponse, error)
 	// 启动 DKG（由协调者调用参与者）
 	StartDKG(ctx context.Context, in *StartDKGRequest, opts ...grpc.CallOption) (*StartDKGResponse, error)
 	// 启动签名（由协调者调用参与者）
 	StartSign(ctx context.Context, in *StartSignRequest, opts ...grpc.CallOption) (*StartSignResponse, error)
-	// 提交签名分片
-	SubmitSignatureShare(ctx context.Context, in *ShareRequest, opts ...grpc.CallOption) (*ShareResponse, error)
+	// 启动密钥轮换（Resharing）（由协调者调用参与者）
+	StartResharing(ctx context.Context, in *StartResharingRequest, opts ...grpc.CallOption) (*StartResharingResponse, error)
 	// 心跳检测
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
@@ -52,18 +52,15 @@ func NewMPCNodeClient(cc grpc.ClientConnInterface) MPCNodeClient {
 	return &mPCNodeClient{cc}
 }
 
-func (c *mPCNodeClient) JoinSigningSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SessionMessage, SessionMessage], error) {
+func (c *mPCNodeClient) SubmitProtocolMessage(ctx context.Context, in *SubmitProtocolMessageRequest, opts ...grpc.CallOption) (*SubmitProtocolMessageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &MPCNode_ServiceDesc.Streams[0], MPCNode_JoinSigningSession_FullMethodName, cOpts...)
+	out := new(SubmitProtocolMessageResponse)
+	err := c.cc.Invoke(ctx, MPCNode_SubmitProtocolMessage_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SessionMessage, SessionMessage]{ClientStream: stream}
-	return x, nil
+	return out, nil
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MPCNode_JoinSigningSessionClient = grpc.BidiStreamingClient[SessionMessage, SessionMessage]
 
 func (c *mPCNodeClient) StartDKG(ctx context.Context, in *StartDKGRequest, opts ...grpc.CallOption) (*StartDKGResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -85,10 +82,10 @@ func (c *mPCNodeClient) StartSign(ctx context.Context, in *StartSignRequest, opt
 	return out, nil
 }
 
-func (c *mPCNodeClient) SubmitSignatureShare(ctx context.Context, in *ShareRequest, opts ...grpc.CallOption) (*ShareResponse, error) {
+func (c *mPCNodeClient) StartResharing(ctx context.Context, in *StartResharingRequest, opts ...grpc.CallOption) (*StartResharingResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ShareResponse)
-	err := c.cc.Invoke(ctx, MPCNode_SubmitSignatureShare_FullMethodName, in, out, cOpts...)
+	out := new(StartResharingResponse)
+	err := c.cc.Invoke(ctx, MPCNode_StartResharing_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,14 +108,14 @@ func (c *mPCNodeClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opt
 //
 // MPC核心服务定义
 type MPCNodeServer interface {
-	// 双向流：加入签名会话
-	JoinSigningSession(grpc.BidiStreamingServer[SessionMessage, SessionMessage]) error
+	// 提交协议消息
+	SubmitProtocolMessage(context.Context, *SubmitProtocolMessageRequest) (*SubmitProtocolMessageResponse, error)
 	// 启动 DKG（由协调者调用参与者）
 	StartDKG(context.Context, *StartDKGRequest) (*StartDKGResponse, error)
 	// 启动签名（由协调者调用参与者）
 	StartSign(context.Context, *StartSignRequest) (*StartSignResponse, error)
-	// 提交签名分片
-	SubmitSignatureShare(context.Context, *ShareRequest) (*ShareResponse, error)
+	// 启动密钥轮换（Resharing）（由协调者调用参与者）
+	StartResharing(context.Context, *StartResharingRequest) (*StartResharingResponse, error)
 	// 心跳检测
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedMPCNodeServer()
@@ -131,8 +128,8 @@ type MPCNodeServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMPCNodeServer struct{}
 
-func (UnimplementedMPCNodeServer) JoinSigningSession(grpc.BidiStreamingServer[SessionMessage, SessionMessage]) error {
-	return status.Error(codes.Unimplemented, "method JoinSigningSession not implemented")
+func (UnimplementedMPCNodeServer) SubmitProtocolMessage(context.Context, *SubmitProtocolMessageRequest) (*SubmitProtocolMessageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitProtocolMessage not implemented")
 }
 func (UnimplementedMPCNodeServer) StartDKG(context.Context, *StartDKGRequest) (*StartDKGResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartDKG not implemented")
@@ -140,8 +137,8 @@ func (UnimplementedMPCNodeServer) StartDKG(context.Context, *StartDKGRequest) (*
 func (UnimplementedMPCNodeServer) StartSign(context.Context, *StartSignRequest) (*StartSignResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartSign not implemented")
 }
-func (UnimplementedMPCNodeServer) SubmitSignatureShare(context.Context, *ShareRequest) (*ShareResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SubmitSignatureShare not implemented")
+func (UnimplementedMPCNodeServer) StartResharing(context.Context, *StartResharingRequest) (*StartResharingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartResharing not implemented")
 }
 func (UnimplementedMPCNodeServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
@@ -167,12 +164,23 @@ func RegisterMPCNodeServer(s grpc.ServiceRegistrar, srv MPCNodeServer) {
 	s.RegisterService(&MPCNode_ServiceDesc, srv)
 }
 
-func _MPCNode_JoinSigningSession_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(MPCNodeServer).JoinSigningSession(&grpc.GenericServerStream[SessionMessage, SessionMessage]{ServerStream: stream})
+func _MPCNode_SubmitProtocolMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitProtocolMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MPCNodeServer).SubmitProtocolMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MPCNode_SubmitProtocolMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MPCNodeServer).SubmitProtocolMessage(ctx, req.(*SubmitProtocolMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MPCNode_JoinSigningSessionServer = grpc.BidiStreamingServer[SessionMessage, SessionMessage]
 
 func _MPCNode_StartDKG_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StartDKGRequest)
@@ -210,20 +218,20 @@ func _MPCNode_StartSign_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MPCNode_SubmitSignatureShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ShareRequest)
+func _MPCNode_StartResharing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartResharingRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MPCNodeServer).SubmitSignatureShare(ctx, in)
+		return srv.(MPCNodeServer).StartResharing(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MPCNode_SubmitSignatureShare_FullMethodName,
+		FullMethod: MPCNode_StartResharing_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MPCNodeServer).SubmitSignatureShare(ctx, req.(*ShareRequest))
+		return srv.(MPCNodeServer).StartResharing(ctx, req.(*StartResharingRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -254,6 +262,10 @@ var MPCNode_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*MPCNodeServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "SubmitProtocolMessage",
+			Handler:    _MPCNode_SubmitProtocolMessage_Handler,
+		},
+		{
 			MethodName: "StartDKG",
 			Handler:    _MPCNode_StartDKG_Handler,
 		},
@@ -262,23 +274,16 @@ var MPCNode_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MPCNode_StartSign_Handler,
 		},
 		{
-			MethodName: "SubmitSignatureShare",
-			Handler:    _MPCNode_SubmitSignatureShare_Handler,
+			MethodName: "StartResharing",
+			Handler:    _MPCNode_StartResharing_Handler,
 		},
 		{
 			MethodName: "Heartbeat",
 			Handler:    _MPCNode_Heartbeat_Handler,
 		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "JoinSigningSession",
-			Handler:       _MPCNode_JoinSigningSession_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
-		},
-	},
-	Metadata: "mpc/v1/mpc.proto",
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "mpc.proto",
 }
 
 const (
@@ -462,5 +467,5 @@ var MPCCoordinator_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "mpc/v1/mpc.proto",
+	Metadata: "mpc.proto",
 }

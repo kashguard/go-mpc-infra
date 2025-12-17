@@ -7,7 +7,7 @@ import (
 	"github.com/go-openapi/swag"
 	"github.com/kashguard/go-mpc-wallet/internal/api"
 	"github.com/kashguard/go-mpc-wallet/internal/api/httperrors"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/coordinator"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/coordinator"
 	"github.com/kashguard/go-mpc-wallet/internal/types"
 	"github.com/kashguard/go-mpc-wallet/internal/util"
 	"github.com/labstack/echo/v4"

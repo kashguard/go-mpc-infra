@@ -13,6 +13,7 @@ import (
 
 	"github.com/kashguard/tss-lib/common"
 	"github.com/kashguard/tss-lib/ecdsa/keygen"
+	"github.com/kashguard/tss-lib/ecdsa/resharing"
 	"github.com/kashguard/tss-lib/ecdsa/signing"
 	eddsaKeygen "github.com/kashguard/tss-lib/eddsa/keygen"
 	eddsaSigning "github.com/kashguard/tss-lib/eddsa/signing"
@@ -20,6 +21,31 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 )
+
+// TSSSigningOptions 签名选项
+type TSSSigningOptions struct {
+	Timeout                 time.Duration
+	EnableIdentifiableAbort bool
+	ProtocolName            string
+}
+
+// DefaultSigningOptions 返回默认签名选项
+func DefaultSigningOptions() TSSSigningOptions {
+	return TSSSigningOptions{
+		Timeout:                 10 * time.Minute,
+		EnableIdentifiableAbort: true,
+		ProtocolName:            "TSS",
+	}
+}
+
+// FROSTSigningOptions 返回 FROST 的签名选项
+func FROSTSigningOptions() TSSSigningOptions {
+	return TSSSigningOptions{
+		Timeout:                 5 * time.Minute,
+		EnableIdentifiableAbort: false,
+		ProtocolName:            "FROST",
+	}
+}
 
 // tssPartyManager 管理 tss-lib 的 Party 实例和消息路由（通用适配层，供 GG18/GG20/FROST 使用）
 type tssPartyManager struct {
@@ -30,8 +56,9 @@ type tssPartyManager struct {
 	partyIDToNodeID map[string]string
 
 	// 当前活跃的协议实例（ECDSA - GG18/GG20）
-	activeKeygen  map[string]*keygen.LocalParty
-	activeSigning map[string]*signing.LocalParty
+	activeKeygen    map[string]*keygen.LocalParty
+	activeSigning   map[string]*signing.LocalParty
+	activeResharing map[string]*resharing.LocalParty
 
 	// 当前活跃的协议实例（EdDSA - FROST）
 	activeEdDSAKeygen  map[string]*eddsaKeygen.LocalParty
@@ -43,11 +70,19 @@ type tssPartyManager struct {
 
 	// 接收到的消息队列（用于处理来自其他节点的消息）
 	// 消息包含字节数据和发送方节点ID
-	incomingKeygenMessages  map[string]chan *incomingMessage
-	incomingSigningMessages map[string]chan *incomingMessage
+	incomingKeygenMessages    map[string]chan *incomingMessage
+	incomingSigningMessages   map[string]chan *incomingMessage
+	incomingResharingMessages map[string]chan *incomingMessage
 
 	// 会话ID映射：keyID/sessionID -> sessionID（用于消息路由时获取会话ID）
 	sessionIDMap map[string]string
+
+	// 会话创建时间（用于清理过期会话）
+	sessionCreationTimes map[string]time.Time
+
+	// 会话清理定时器
+	cleanupTicker *time.Ticker
+	cleanupDone   chan struct{}
 }
 
 // incomingMessage 接收到的消息（包含消息字节和发送方信息）
@@ -58,17 +93,78 @@ type incomingMessage struct {
 }
 
 func newTSSPartyManager(messageRouter func(sessionID string, nodeID string, msg tss.Message, isBroadcast bool) error) *tssPartyManager {
-	return &tssPartyManager{
-		nodeIDToPartyID:         make(map[string]*tss.PartyID),
-		partyIDToNodeID:         make(map[string]string),
-		activeKeygen:            make(map[string]*keygen.LocalParty),
-		activeSigning:           make(map[string]*signing.LocalParty),
-		activeEdDSAKeygen:       make(map[string]*eddsaKeygen.LocalParty),
-		activeEdDSASigning:      make(map[string]*eddsaSigning.LocalParty),
-		messageRouter:           messageRouter,
-		incomingKeygenMessages:  make(map[string]chan *incomingMessage),
-		incomingSigningMessages: make(map[string]chan *incomingMessage),
-		sessionIDMap:            make(map[string]string),
+	manager := &tssPartyManager{
+		nodeIDToPartyID:           make(map[string]*tss.PartyID),
+		partyIDToNodeID:           make(map[string]string),
+		activeKeygen:              make(map[string]*keygen.LocalParty),
+		activeSigning:             make(map[string]*signing.LocalParty),
+		activeResharing:           make(map[string]*resharing.LocalParty),
+		activeEdDSAKeygen:         make(map[string]*eddsaKeygen.LocalParty),
+		activeEdDSASigning:        make(map[string]*eddsaSigning.LocalParty),
+		messageRouter:             messageRouter,
+		incomingKeygenMessages:    make(map[string]chan *incomingMessage),
+		incomingSigningMessages:   make(map[string]chan *incomingMessage),
+		incomingResharingMessages: make(map[string]chan *incomingMessage),
+		sessionIDMap:              make(map[string]string),
+		sessionCreationTimes:      make(map[string]time.Time),
+		cleanupDone:               make(chan struct{}),
+	}
+	// 启动会话清理器
+	manager.startSessionCleaner()
+	return manager
+}
+
+// startSessionCleaner 启动会话清理器
+func (m *tssPartyManager) startSessionCleaner() {
+	m.cleanupTicker = time.NewTicker(5 * time.Minute)
+	go func() {
+		for {
+			select {
+			case <-m.cleanupTicker.C:
+				m.cleanupStaleSessions()
+			case <-m.cleanupDone:
+				return
+			}
+		}
+	}()
+}
+
+// cleanupStaleSessions 清理过期会话
+func (m *tssPartyManager) cleanupStaleSessions() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	timeout := 30 * time.Minute // 默认30分钟超时
+
+	for sessionID, createTime := range m.sessionCreationTimes {
+		if now.Sub(createTime) > timeout {
+			log.Info().Str("session_id", sessionID).Msg("Cleaning up stale session")
+
+			// 清理各类资源
+			delete(m.activeKeygen, sessionID)
+			delete(m.activeSigning, sessionID)
+			delete(m.activeResharing, sessionID)
+			delete(m.activeEdDSAKeygen, sessionID)
+			delete(m.activeEdDSASigning, sessionID)
+			delete(m.sessionIDMap, sessionID)
+
+			// 关闭并清理通道
+			if ch, ok := m.incomingKeygenMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingKeygenMessages, sessionID)
+			}
+			if ch, ok := m.incomingSigningMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingSigningMessages, sessionID)
+			}
+			if ch, ok := m.incomingResharingMessages[sessionID]; ok {
+				close(ch)
+				delete(m.incomingResharingMessages, sessionID)
+			}
+
+			delete(m.sessionCreationTimes, sessionID)
+		}
 	}
 }
 
@@ -209,6 +305,7 @@ func (m *tssPartyManager) executeKeygen(
 	}
 	// 记录会话ID映射（keyID作为sessionID）
 	m.sessionIDMap[keyID] = keyID
+	m.sessionCreationTimes[keyID] = time.Now()
 	m.mu.Unlock()
 
 	// 创建消息队列（如果不存在）
@@ -496,6 +593,236 @@ func (m *tssPartyManager) executeKeygen(
 	}
 }
 
+// executeResharing 执行密钥轮换（Resharing）协议
+func (m *tssPartyManager) executeResharing(
+	ctx context.Context,
+	keyID string,
+	oldNodeIDs []string,
+	newNodeIDs []string,
+	threshold int,
+	newThreshold int,
+	thisNodeID string,
+	keyData *keygen.LocalPartySaveData,
+) (*keygen.LocalPartySaveData, error) {
+	// 确保 oldNodeIDs 和 newNodeIDs 有序
+	sortedOldNodeIDs := make([]string, len(oldNodeIDs))
+	copy(sortedOldNodeIDs, oldNodeIDs)
+	sort.Strings(sortedOldNodeIDs)
+
+	sortedNewNodeIDs := make([]string, len(newNodeIDs))
+	copy(sortedNewNodeIDs, newNodeIDs)
+	sort.Strings(sortedNewNodeIDs)
+
+	// 为旧委员会和新委员会设置 PartyID
+	if err := m.setupPartyIDs(sortedOldNodeIDs); err != nil {
+		return nil, errors.Wrap(err, "setup old party IDs")
+	}
+	if err := m.setupPartyIDs(sortedNewNodeIDs); err != nil {
+		return nil, errors.Wrap(err, "setup new party IDs")
+	}
+
+	oldParties, err := m.getPartyIDs(sortedOldNodeIDs)
+	if err != nil {
+		return nil, errors.Wrap(err, "get old party IDs")
+	}
+	newParties, err := m.getPartyIDs(sortedNewNodeIDs)
+	if err != nil {
+		return nil, errors.Wrap(err, "get new party IDs")
+	}
+
+	thisPartyID, ok := m.nodeIDToPartyID[thisNodeID]
+	if !ok {
+		return nil, errors.Errorf("this node ID not found: %s", thisNodeID)
+	}
+
+	// 构建 Resharing 参数
+	ctxTSS := tss.NewPeerContext(oldParties)
+	newCtxTSS := tss.NewPeerContext(newParties)
+	params := tss.NewReSharingParameters(tss.S256(), ctxTSS, newCtxTSS, thisPartyID, len(oldParties), threshold, len(newParties), newThreshold)
+
+	// 创建消息通道
+	outCh := make(chan tss.Message, len(oldParties)+len(newParties))
+	endCh := make(chan *keygen.LocalPartySaveData, 1)
+	errCh := make(chan *tss.Error, 1)
+
+	// 创建 Resharing LocalParty
+	party := resharing.NewLocalParty(params, *keyData, outCh, endCh)
+
+	m.mu.Lock()
+	if localParty, ok := party.(*resharing.LocalParty); ok {
+		m.activeResharing[keyID] = localParty
+	}
+	m.sessionIDMap[keyID] = keyID
+	m.sessionCreationTimes[keyID] = time.Now()
+	m.mu.Unlock()
+
+	// 创建消息队列
+	m.mu.Lock()
+	msgCh, exists := m.incomingResharingMessages[keyID]
+	if !exists {
+		msgCh = make(chan *incomingMessage, 100)
+		m.incomingResharingMessages[keyID] = msgCh
+	}
+	m.mu.Unlock()
+
+	// 启动协议
+	go func() {
+		if err := party.Start(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	// 消息处理循环
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case incomingMsg, ok := <-msgCh:
+				if !ok {
+					return
+				}
+
+				m.mu.RLock()
+				localParty, exists := m.activeResharing[keyID]
+				m.mu.RUnlock()
+
+				if !exists {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				fromPartyID, ok := m.nodeIDToPartyID[incomingMsg.fromNodeID]
+				if !ok {
+					continue
+				}
+
+				_, _ = localParty.UpdateFromBytes(incomingMsg.msgBytes, fromPartyID, incomingMsg.isBroadcast)
+			}
+		}
+	}()
+
+	// 等待结果
+	timeout := time.NewTimer(10 * time.Minute)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout.C:
+			return nil, errors.New("resharing timeout")
+		case msg := <-outCh:
+			// 路由消息
+			targetNodes := msg.GetTo()
+			isBroadcast := len(targetNodes) == 0
+
+			if m.messageRouter != nil {
+				if isBroadcast {
+					// 广播到旧节点和新节点
+					targetNodeIDs := make(map[string]struct{})
+					m.mu.RLock()
+					for _, pid := range oldParties {
+						if nid, ok := m.partyIDToNodeID[pid.Id]; ok && nid != thisNodeID {
+							targetNodeIDs[nid] = struct{}{}
+						}
+					}
+					for _, pid := range newParties {
+						if nid, ok := m.partyIDToNodeID[pid.Id]; ok && nid != thisNodeID {
+							targetNodeIDs[nid] = struct{}{}
+						}
+					}
+					m.mu.RUnlock()
+
+					for nid := range targetNodeIDs {
+						m.messageRouter(keyID, nid, msg, true)
+					}
+				} else {
+					for _, to := range targetNodes {
+						if nid, ok := m.getNodeID(to.Id); ok {
+							m.messageRouter(keyID, nid, msg, false)
+						}
+					}
+				}
+			}
+		case saveData := <-endCh:
+			m.mu.Lock()
+			delete(m.activeResharing, keyID)
+			if ch, ok := m.incomingResharingMessages[keyID]; ok {
+				close(ch)
+				delete(m.incomingResharingMessages, keyID)
+			}
+			m.mu.Unlock()
+			return saveData, nil
+		case err := <-errCh:
+			m.mu.Lock()
+			delete(m.activeResharing, keyID)
+			if ch, ok := m.incomingResharingMessages[keyID]; ok {
+				close(ch)
+				delete(m.incomingResharingMessages, keyID)
+			}
+			m.mu.Unlock()
+			return nil, errors.Wrap(err, "resharing error")
+		}
+	}
+}
+
+// ProcessIncomingResharingMessage 处理接收到的 Resharing 消息
+func (m *tssPartyManager) ProcessIncomingResharingMessage(
+	ctx context.Context,
+	sessionID string,
+	fromNodeID string,
+	msgBytes []byte,
+	isBroadcast bool,
+) error {
+	var msgCh chan *incomingMessage
+	var exists bool
+
+	// 等待队列创建
+	waitTimeout := time.NewTimer(5 * time.Second)
+	defer waitTimeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	// 首次检查
+	m.mu.RLock()
+	msgCh, exists = m.incomingResharingMessages[sessionID]
+	m.mu.RUnlock()
+
+	if !exists {
+		for !exists {
+			select {
+			case <-waitTimeout.C:
+				return errors.Errorf("timeout waiting for resharing message queue (session %s)", sessionID)
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+				m.mu.RLock()
+				msgCh, exists = m.incomingResharingMessages[sessionID]
+				m.mu.RUnlock()
+				if exists {
+					break
+				}
+			}
+		}
+	}
+
+	incomingMsg := &incomingMessage{
+		msgBytes:    msgBytes,
+		fromNodeID:  fromNodeID,
+		isBroadcast: isBroadcast,
+	}
+
+	select {
+	case msgCh <- incomingMsg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return errors.Errorf("resharing message queue full for session %s", sessionID)
+	}
+}
+
 // SigningOptions 签名执行选项
 type SigningOptions struct {
 	// Timeout 超时时间（默认 2 分钟）
@@ -504,24 +831,6 @@ type SigningOptions struct {
 	EnableIdentifiableAbort bool
 	// ProtocolName 协议名称（用于错误消息）
 	ProtocolName string
-}
-
-// DefaultSigningOptions 返回默认的签名选项（GG18）
-func DefaultSigningOptions() SigningOptions {
-	return SigningOptions{
-		Timeout:                 2 * time.Minute,
-		EnableIdentifiableAbort: false,
-		ProtocolName:            "GG18",
-	}
-}
-
-// GG20SigningOptions 返回 GG20 的签名选项
-func GG20SigningOptions() SigningOptions {
-	return SigningOptions{
-		Timeout:                 1 * time.Minute,
-		EnableIdentifiableAbort: true,
-		ProtocolName:            "GG20",
-	}
 }
 
 // executeSigning 执行真正的阈值签名协议（通用实现，支持 GG18/GG20）
@@ -533,7 +842,7 @@ func (m *tssPartyManager) executeSigning(
 	nodeIDs []string,
 	thisNodeID string,
 	keyData *keygen.LocalPartySaveData,
-	opts SigningOptions,
+	opts TSSSigningOptions,
 ) (*common.SignatureData, error) {
 	if err := m.setupPartyIDs(nodeIDs); err != nil {
 		return nil, errors.Wrap(err, "setup party IDs")
@@ -587,6 +896,7 @@ func (m *tssPartyManager) executeSigning(
 	}
 	// 记录会话ID映射
 	m.sessionIDMap[sessionID] = sessionID
+	m.sessionCreationTimes[sessionID] = time.Now()
 	m.mu.Unlock()
 
 	// 创建消息队列（如果不存在）
@@ -1432,6 +1742,7 @@ func (m *tssPartyManager) executeEdDSAKeygen(
 	}
 	// 记录会话ID映射（keyID作为sessionID）
 	m.sessionIDMap[keyID] = keyID
+	m.sessionCreationTimes[keyID] = time.Now()
 	m.mu.Unlock()
 
 	// 创建消息队列（如果不存在）
@@ -1657,7 +1968,7 @@ func (m *tssPartyManager) executeEdDSASigning(
 	nodeIDs []string,
 	thisNodeID string,
 	keyData *eddsaKeygen.LocalPartySaveData,
-	opts SigningOptions,
+	opts TSSSigningOptions,
 ) (*common.SignatureData, error) {
 	if err := m.setupPartyIDs(nodeIDs); err != nil {
 		return nil, errors.Wrap(err, "setup party IDs")
@@ -1704,6 +2015,7 @@ func (m *tssPartyManager) executeEdDSASigning(
 	}
 	// 记录会话ID映射
 	m.sessionIDMap[sessionID] = sessionID
+	m.sessionCreationTimes[sessionID] = time.Now()
 
 	// 创建消息队列（如果不存在）
 	// 重要：队列必须在启动 LocalParty 之前创建，这样 ProcessIncomingSigningMessage 才能及时找到队列
@@ -1952,14 +2264,5 @@ func (m *tssPartyManager) executeEdDSASigning(
 			}
 			return nil, errors.Wrapf(err, "%s signing error", opts.ProtocolName)
 		}
-	}
-}
-
-// FROSTSigningOptions 返回 FROST 的签名选项
-func FROSTSigningOptions() SigningOptions {
-	return SigningOptions{
-		Timeout:                 5 * time.Minute, // FROST 2 轮，但需要足够时间处理消息传递
-		EnableIdentifiableAbort: false,           // FROST 不支持可识别的中止
-		ProtocolName:            "FROST",
 	}
 }

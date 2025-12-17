@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/discovery"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/discovery"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/storage"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 )

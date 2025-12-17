@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kashguard/go-mpc-wallet/cmd/cert"
 	"github.com/kashguard/go-mpc-wallet/cmd/db"
 	"github.com/kashguard/go-mpc-wallet/cmd/env"
 	"github.com/kashguard/go-mpc-wallet/cmd/probe"
@@ -31,6 +32,7 @@ func Execute() {
 
 	// attach the subcommands
 	rootCmd.AddCommand(
+		cert.New(),
 		db.New(),
 		env.New(),
 		probe.New(),

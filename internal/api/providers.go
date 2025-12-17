@@ -11,17 +11,18 @@ import (
 	"github.com/kashguard/go-mpc-wallet/internal/auth"
 	"github.com/kashguard/go-mpc-wallet/internal/config"
 	"github.com/kashguard/go-mpc-wallet/internal/i18n"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/backup"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/coordinator"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/discovery"
+	infra_grpc "github.com/kashguard/go-mpc-wallet/internal/infra/grpc"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/key"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/session"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/signing"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/storage"
 	"github.com/kashguard/go-mpc-wallet/internal/mailer"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/coordinator"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/discovery"
 	mpcgrpc "github.com/kashguard/go-mpc-wallet/internal/mpc/grpc"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/backup"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/key"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/node"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/signing"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
 	"github.com/kashguard/go-mpc-wallet/internal/persistence"
 	"github.com/kashguard/go-mpc-wallet/internal/push"
 	"github.com/kashguard/go-mpc-wallet/internal/push/provider"
@@ -309,18 +310,51 @@ func NewDKGServiceProvider(
 	return key.NewDKGService(metadataStore, keyShareStorage, protocolEngine, registry, nodeManager, nodeDiscovery)
 }
 
+func NewBackupService(metadataStore storage.MetadataStore) backup.SSSBackupService {
+	backupStorage, ok := metadataStore.(storage.BackupShareStorage)
+	if !ok {
+		log.Error().Msg("MetadataStore does not implement BackupShareStorage")
+	}
+	return backup.NewService(backupStorage, metadataStore)
+}
+
+func NewRecoveryService(metadataStore storage.MetadataStore, keyShareStorage storage.KeyShareStorage, backupService backup.SSSBackupService) *backup.RecoveryService {
+	backupStorage, ok := metadataStore.(storage.BackupShareStorage)
+	if !ok {
+		log.Error().Msg("MetadataStore does not implement BackupShareStorage")
+	}
+	return backup.NewRecoveryService(backupService, backupStorage, keyShareStorage)
+}
+
+func NewBackupStore(metadataStore storage.MetadataStore) backup.Store {
+	store, ok := metadataStore.(backup.Store)
+	if !ok {
+		// This should not happen if PostgreSQLStore is used correctly
+		log.Fatal().Msg("MetadataStore does not implement backup.Store")
+	}
+	return store
+}
+
 func NewKeyServiceProvider(
 	metadataStore storage.MetadataStore,
 	keyShareStorage storage.KeyShareStorage,
 	protocolEngine protocol.Engine,
 	dkgService *key.DKGService,
+	backupService backup.SSSBackupService,
 ) *key.Service {
-	backupStorage, ok := metadataStore.(storage.BackupShareStorage)
-	if !ok {
-		log.Error().Msg("MetadataStore does not implement BackupShareStorage")
-	}
-	backupService := backup.NewService(backupStorage, metadataStore)
 	return key.NewService(metadataStore, keyShareStorage, protocolEngine, dkgService, backupService)
+}
+
+func NewInfrastructureServer(
+	cfg config.Server,
+	keyService *key.Service,
+	signingService *signing.Service,
+	backupService backup.SSSBackupService,
+	recoveryService *backup.RecoveryService,
+	store backup.Store,
+	nodeManager *node.Manager,
+) *infra_grpc.InfrastructureServer {
+	return infra_grpc.NewInfrastructureServer(&cfg, keyService, signingService, backupService, recoveryService, store, nodeManager)
 }
 
 func NewSigningServiceProvider(keyService *key.Service, protocolEngine protocol.Engine, sessionManager *session.Manager, nodeDiscovery *node.Discovery, cfg config.Server, grpcClient *mpcgrpc.GRPCClient) *signing.Service {

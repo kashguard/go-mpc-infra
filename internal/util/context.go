@@ -15,6 +15,8 @@ const (
 	CTXKeyCacheControl  contextKey = "cache_control"
 	CTXKeyRequestID     contextKey = "request_id"
 	CTXKeyDisableLogger contextKey = "disable_logger"
+	CTXKeyAppPermissions contextKey = "app_permissions"
+	CTXKeyAppTenantID    contextKey = "app_tenant_id"
 )
 
 //nolint:containedctx

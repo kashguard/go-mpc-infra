@@ -297,17 +297,17 @@ func (c *GRPCClient) SendSigningMessage(ctx context.Context, nodeID string, msg 
 		Interface("routing", routing).
 		Msg("🔍 [DIAGNOSTIC] Sending signing message via gRPC")
 
-	// 使用SubmitSignatureShare发送消息
+	// 使用SubmitProtocolMessage发送消息
 	// 注意：NodeId应该表示发送方节点ID，而不是目标节点ID
-	shareReq := &pb.ShareRequest{
+	req := &pb.SubmitProtocolMessageRequest{
 		SessionId: sessionID,    // 使用传入的会话ID
 		NodeId:    c.thisNodeID, // 发送方节点ID（当前节点）
-		ShareData: msgBytes,
+		Data:      msgBytes,
 		Round:     round,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	resp, err := client.SubmitSignatureShare(ctx, shareReq)
+	resp, err := client.SubmitProtocolMessage(ctx, req)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -368,20 +368,20 @@ func (c *GRPCClient) SendKeygenMessage(ctx context.Context, nodeID string, msg t
 		Int32("round_set", round).
 		Msg("Sending DKG ShareRequest via gRPC")
 
-	// DKG消息也通过SubmitSignatureShare发送（使用相同的协议）
+	// DKG消息也通过SubmitProtocolMessage发送（使用相同的协议）
 	// 服务端会根据会话类型判断是DKG还是签名消息
 	// 注意：NodeId应该表示发送方节点ID，而不是目标节点ID
 	// 目标节点ID已经通过gRPC调用的目标地址确定了
-	shareReq := &pb.ShareRequest{
+	req := &pb.SubmitProtocolMessageRequest{
 		SessionId: sessionID,    // 使用keyID作为会话ID
 		NodeId:    c.thisNodeID, // 发送方节点ID（当前节点）
-		ShareData: msgBytes,
+		Data:      msgBytes,
 		Round:     round,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
 	// 发送消息
-	resp, err := client.SubmitSignatureShare(ctx, shareReq)
+	resp, err := client.SubmitProtocolMessage(ctx, req)
 	if err != nil {
 		return errors.Wrapf(err, "failed to send keygen message to node %s (sessionID: %s)", nodeID, sessionID)
 	}
@@ -404,15 +404,15 @@ func (c *GRPCClient) SendDKGStartNotification(ctx context.Context, nodeID string
 	}
 
 	// 发送特殊的 "DKG_START" 消息
-	shareReq := &pb.ShareRequest{
+	req := &pb.SubmitProtocolMessageRequest{
 		SessionId: sessionID,
 		NodeId:    nodeID,
-		ShareData: []byte("DKG_START"), // 特殊标记，participant 会识别并启动 DKG
+		Data:      []byte("DKG_START"), // 特殊标记，participant 会识别并启动 DKG
 		Round:     0,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	_, err = client.SubmitSignatureShare(ctx, shareReq)
+	_, err = client.SubmitProtocolMessage(ctx, req)
 	if err != nil {
 		return errors.Wrapf(err, "failed to send DKG start notification to node %s (sessionID: %s)", nodeID, sessionID)
 	}
@@ -434,6 +434,40 @@ func (c *GRPCClient) CloseConnection(nodeID string) error {
 	}
 
 	return nil
+}
+
+// SendStartResharing 发送启动密钥轮换请求
+func (c *GRPCClient) SendStartResharing(ctx context.Context, nodeID string, req *pb.StartResharingRequest) (*pb.StartResharingResponse, error) {
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Msg("Sending StartResharing RPC to participant")
+
+	client, err := c.getOrCreateConnection(ctx, nodeID)
+	if err != nil {
+		log.Error().Err(err).Str("node_id", nodeID).Msg("Failed to get gRPC connection")
+		return nil, errors.Wrapf(err, "failed to get connection to node %s", nodeID)
+	}
+
+	log.Debug().
+		Str("node_id", nodeID).
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Msg("Calling StartResharing RPC")
+
+	resp, err := client.StartResharing(ctx, req)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("node_id", nodeID).
+			Str("key_id", req.KeyId).
+			Str("session_id", req.SessionId).
+			Msg("StartResharing RPC call failed")
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 // Close 关闭所有连接

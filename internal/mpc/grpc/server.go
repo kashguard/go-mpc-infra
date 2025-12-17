@@ -11,18 +11,17 @@ import (
 	"encoding/hex"
 
 	"github.com/kashguard/go-mpc-wallet/internal/config"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/session"
+	"github.com/kashguard/go-mpc-wallet/internal/infra/storage"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/session"
-	"github.com/kashguard/go-mpc-wallet/internal/mpc/storage"
 	pb "github.com/kashguard/go-mpc-wallet/internal/pb/mpc/v1"
+	"github.com/kashguard/go-mpc-wallet/internal/util/cert"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 )
 
 // inferProtocolForDKG 根据算法和曲线推断DKG应该使用的协议
@@ -70,6 +69,9 @@ type GRPCServer struct {
 
 	// 用于确保每个签名会话只启动一次
 	signStartOnce sync.Map // map[string]*sync.Once
+
+	// 用于确保每个Resharing会话只启动一次
+	resharingStartOnce sync.Map // map[string]*sync.Once
 }
 
 // ServerConfig gRPC服务端配置
@@ -104,10 +106,13 @@ func NewGRPCServerWithRegistry(
 	nodeID string,
 ) *GRPCServer {
 	serverCfg := &ServerConfig{
-		Port:       cfg.MPC.GRPCPort,
-		TLSEnabled: cfg.MPC.TLSEnabled,
-		MaxConnAge: 2 * time.Hour,
-		KeepAlive:  30 * time.Second,
+		Port:          cfg.MPC.GRPCPort,
+		TLSEnabled:    cfg.MPC.TLSEnabled,
+		TLSCertFile:   cfg.MPC.TLSCertFile,
+		TLSKeyFile:    cfg.MPC.TLSKeyFile,
+		TLSCACertFile: cfg.MPC.TLSCACertFile,
+		MaxConnAge:    2 * time.Hour,
+		KeepAlive:     30 * time.Second,
 	}
 
 	srv := &GRPCServer{
@@ -154,101 +159,6 @@ func (s *GRPCServer) GetServerOptions() ([]grpc.ServerOption, error) {
 	opts = append(opts, grpc.MaxSendMsgSize(10*1024*1024)) // 10MB
 
 	return opts, nil
-}
-
-// JoinSigningSession 双向流：加入签名会话
-func (s *GRPCServer) JoinSigningSession(stream grpc.BidiStreamingServer[pb.SessionMessage, pb.SessionMessage]) error {
-	ctx := stream.Context()
-	var sessionID string
-
-	// 接收初始加入请求
-	req, err := stream.Recv()
-	if err != nil {
-		return status.Errorf(codes.Internal, "failed to receive join request: %v", err)
-	}
-
-	// 处理加入请求
-	joinReq := req.GetJoinRequest()
-	if joinReq == nil {
-		return status.Error(codes.InvalidArgument, "first message must be a join request")
-	}
-
-	sessionID = joinReq.SessionId
-
-	// 验证会话
-	sess, err := s.sessionManager.GetSession(ctx, sessionID)
-	if err != nil {
-		return status.Errorf(codes.NotFound, "session not found: %v", err)
-	}
-
-	// 发送确认消息
-	confirmation := &pb.SessionConfirmation{
-		SessionId:    sessionID,
-		Status:       sess.Status,
-		Threshold:    int32(sess.Threshold),
-		TotalNodes:   int32(sess.TotalNodes),
-		Participants: sess.ParticipatingNodes,
-		CurrentRound: int32(sess.CurrentRound),
-		ConfirmedAt:  time.Now().Format(time.RFC3339),
-	}
-
-	if err := stream.Send(&pb.SessionMessage{
-		MessageType: &pb.SessionMessage_Confirmation{
-			Confirmation: confirmation,
-		},
-	}); err != nil {
-		return status.Errorf(codes.Internal, "failed to send confirmation: %v", err)
-	}
-
-	// 处理后续消息
-	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			// 流结束
-			return nil
-		}
-
-		// 处理消息
-		if shareMsg := msg.GetShareMessage(); shareMsg != nil {
-			// 这是协议消息（DKG或签名）
-			// 从joinReq中获取发送方节点ID（如果可用），否则使用空字符串
-			fromNodeID := ""
-			if joinReq.NodeId != "" {
-				fromNodeID = joinReq.NodeId
-			}
-			if err := s.handleProtocolMessage(ctx, sessionID, fromNodeID, shareMsg); err != nil {
-				// 发送错误消息
-				errorMsg := &pb.ErrorMessage{
-					ErrorCode:    "PROTOCOL_ERROR",
-					ErrorMessage: err.Error(),
-					Recoverable:  true,
-					OccurredAt:   time.Now().Format(time.RFC3339),
-				}
-				if sendErr := stream.Send(&pb.SessionMessage{
-					MessageType: &pb.SessionMessage_ErrorMessage{
-						ErrorMessage: errorMsg,
-					},
-				}); sendErr != nil {
-					return status.Errorf(codes.Internal, "failed to send error message: %v", sendErr)
-				}
-				continue
-			}
-		} else if heartbeatReq := msg.GetHeartbeatRequest(); heartbeatReq != nil {
-			// 处理心跳
-			heartbeatResp := &pb.HeartbeatResponse{
-				Alive:      true,
-				ReceivedAt: time.Now().Format(time.RFC3339),
-			}
-			_ = heartbeatResp // 用于后续扩展
-			if err := stream.Send(&pb.SessionMessage{
-				MessageType: &pb.SessionMessage_HeartbeatRequest{
-					HeartbeatRequest: heartbeatReq,
-				},
-			}); err != nil {
-				return status.Errorf(codes.Internal, "failed to send heartbeat response: %v", err)
-			}
-		}
-	}
 }
 
 // StartDKG 由协调者调用以启动参与者的 DKG
@@ -630,8 +540,117 @@ func (s *GRPCServer) StartSign(ctx context.Context, req *pb.StartSignRequest) (*
 	return &pb.StartSignResponse{Started: true, Message: "Signing started in background"}, nil
 }
 
+// StartResharing 由协调者调用以启动参与者的密钥轮换
+func (s *GRPCServer) StartResharing(ctx context.Context, req *pb.StartResharingRequest) (*pb.StartResharingResponse, error) {
+	log.Info().
+		Str("key_id", req.KeyId).
+		Str("session_id", req.SessionId).
+		Str("this_node_id", s.nodeID).
+		Msg("StartResharing RPC received")
+
+	sessionID := req.SessionId
+	if sessionID == "" {
+		sessionID = req.KeyId
+	}
+
+	onceInterface, _ := s.resharingStartOnce.LoadOrStore(sessionID, &sync.Once{})
+	once := onceInterface.(*sync.Once)
+
+	var started bool
+
+	once.Do(func() {
+		started = true
+		log.Info().
+			Str("key_id", req.KeyId).
+			Str("session_id", sessionID).
+			Str("this_node_id", s.nodeID).
+			Msg("sync.Once.Do executed in StartResharing RPC - starting resharing in goroutine")
+
+		go func() {
+			resharingTimeout := 10 * time.Minute
+			resharingCtx, cancel := context.WithTimeout(context.Background(), resharingTimeout)
+			defer cancel()
+
+			// 获取协议引擎（Resharing 目前仅支持 GG20）
+			// TODO: 支持其他协议
+			engine := s.protocolEngine
+			if s.protocolRegistry != nil {
+				if regEngine, err := s.protocolRegistry.Get("gg20"); err == nil {
+					engine = regEngine
+				}
+			}
+
+			// 类型断言检查是否支持 ExecuteResharing
+			// 目前只有 GG20Protocol 实现了 ExecuteResharing
+			// 如果 engine 是 interface Wrapper，可能需要扩展 Engine 接口
+			type Resharer interface {
+				ExecuteResharing(
+					ctx context.Context,
+					keyID string,
+					oldNodeIDs []string,
+					newNodeIDs []string,
+					oldThreshold int,
+					newThreshold int,
+				) (*protocol.KeyGenResponse, error)
+			}
+
+			resharer, ok := engine.(Resharer)
+			if !ok {
+				log.Error().
+					Str("key_id", req.KeyId).
+					Str("session_id", sessionID).
+					Str("this_node_id", s.nodeID).
+					Msg("Protocol engine does not support Resharing")
+				return
+			}
+
+			resp, err := resharer.ExecuteResharing(
+				resharingCtx,
+				req.KeyId,
+				req.OldNodeIds,
+				req.NewNodeIds,
+				int(req.OldThreshold),
+				int(req.NewThreshold),
+			)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("key_id", req.KeyId).
+					Str("session_id", sessionID).
+					Str("this_node_id", s.nodeID).
+					Msg("ExecuteResharing failed in StartResharing RPC goroutine")
+				return
+			}
+
+			if resp != nil && resp.PublicKey != nil && resp.PublicKey.Hex != "" {
+				log.Info().
+					Str("key_id", req.KeyId).
+					Str("session_id", sessionID).
+					Str("this_node_id", s.nodeID).
+					Str("public_key", resp.PublicKey.Hex).
+					Msg("Resharing completed successfully")
+
+				// 存储新分片
+				if s.keyShareStorage != nil && len(resp.KeyShares) > 0 {
+					for nodeID, share := range resp.KeyShares {
+						if err := s.keyShareStorage.StoreKeyShare(resharingCtx, req.KeyId, nodeID, share.Share); err != nil {
+							log.Error().Err(err).Msg("Failed to store new key share")
+						}
+					}
+				}
+			}
+		}()
+	})
+
+	if !started {
+		return &pb.StartResharingResponse{Started: true, Message: "Resharing already started"}, nil
+	}
+
+	return &pb.StartResharingResponse{Started: true, Message: "Resharing started in background"}, nil
+}
+
 // handleProtocolMessage 处理协议消息（DKG或签名）
-func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string, fromNodeID string, shareMsg *pb.ShareMessage) error {
+func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string, fromNodeID string, shareData []byte, round int32, isBroadcast bool) error {
 	// 从会话中判断消息类型
 	sess, err := s.sessionManager.GetSession(ctx, sessionID)
 	if err != nil {
@@ -650,12 +669,12 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 	// - 签名: 其他情况一律视为签名（避免签名消息误入 DKG 逻辑）
 	isKeygenSession := sessionID == sess.KeyID || strings.HasPrefix(strings.ToLower(sessionID), "key-")
 	isDKG := isKeygenSession
-	isBroadcast := shareMsg != nil && shareMsg.Round == -1
+	// isBroadcast is passed as argument
 
 	if isDKG {
 		// 处理特殊控制消息
-		if len(shareMsg.ShareData) > 0 {
-			data := string(shareMsg.ShareData)
+		if len(shareData) > 0 {
+			data := string(shareData)
 			if data == "DKG_START" {
 				// coordinator 发送的启动通知，只触发启动，不处理内容
 				// 后续真实 DKG 消息会再到达
@@ -858,7 +877,7 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 		}
 
 		// 消息会被放入队列，等待DKG协议启动后处理
-		if err := engine.ProcessIncomingKeygenMessage(ctx, sessionID, fromNodeID, shareMsg.ShareData, isBroadcast); err != nil {
+		if err := engine.ProcessIncomingKeygenMessage(ctx, sessionID, fromNodeID, shareData, isBroadcast); err != nil {
 			return errors.Wrap(err, "failed to process keygen message")
 		}
 	} else {
@@ -879,7 +898,7 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 			}
 		}
 
-		if err := engine.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, shareMsg.ShareData, isBroadcast); err != nil {
+		if err := engine.ProcessIncomingSigningMessage(ctx, sessionID, fromNodeID, shareData, isBroadcast); err != nil {
 			return errors.Wrap(err, "failed to process signing message")
 		}
 	}
@@ -887,36 +906,33 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 	return nil
 }
 
-// SubmitSignatureShare 提交签名分片（单向RPC）
+// SubmitProtocolMessage 提交协议消息（单向RPC）
 // 这个方法同时用于DKG和签名消息
-func (s *GRPCServer) SubmitSignatureShare(ctx context.Context, req *pb.ShareRequest) (*pb.ShareResponse, error) {
+func (s *GRPCServer) SubmitProtocolMessage(ctx context.Context, req *pb.SubmitProtocolMessageRequest) (*pb.SubmitProtocolMessageResponse, error) {
 	log.Debug().
 		Str("session_id", req.SessionId).
 		Str("from_node", req.NodeId).
 		Int32("round", req.Round).
-		Int("data_len", len(req.ShareData)).
-		Msg("Received SubmitSignatureShare request")
+		Int("data_len", len(req.Data)).
+		Msg("Received SubmitProtocolMessage request")
 
 	// 处理协议消息，传递发送方节点ID
-	if err := s.handleProtocolMessage(ctx, req.SessionId, req.NodeId, &pb.ShareMessage{
-		ShareData:   req.ShareData,
-		Round:       req.Round,
-		SubmittedAt: req.Timestamp,
-	}); err != nil {
+	isBroadcast := req.Round == -1
+	if err := s.handleProtocolMessage(ctx, req.SessionId, req.NodeId, req.Data, req.Round, isBroadcast); err != nil {
 		log.Error().Err(err).
 			Str("session_id", req.SessionId).
 			Str("from_node", req.NodeId).
 			Msg("Failed to handle protocol message")
-		return &pb.ShareResponse{
+		return &pb.SubmitProtocolMessageResponse{
 			Accepted:  false,
 			Message:   err.Error(),
 			NextRound: req.Round,
 		}, nil
 	}
 
-	return &pb.ShareResponse{
+	return &pb.SubmitProtocolMessageResponse{
 		Accepted:  true,
-		Message:   "share accepted",
+		Message:   "message accepted",
 		NextRound: req.Round + 1,
 	}, nil
 }
@@ -933,6 +949,14 @@ func (s *GRPCServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 
 // Start 启动 gRPC 服务器
 func (s *GRPCServer) Start(ctx context.Context) error {
+	// 如果启用了 TLS，在启动前验证证书
+	if s.cfg.TLSEnabled {
+		if err := cert.VerifyTLSConfig(s.cfg.TLSCertFile, s.cfg.TLSKeyFile, s.cfg.TLSCACertFile); err != nil {
+			return errors.Wrap(err, "TLS certificate verification failed")
+		}
+		log.Info().Msg("TLS certificates verified successfully")
+	}
+
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
 
 	listener, err := net.Listen("tcp", addr)
