@@ -8,6 +8,7 @@ type RootKeyMetadata struct {
 	PublicKey    string
 	Algorithm    string
 	Curve        string
+	ChainCode    string // Hex encoded chain code (32 bytes)
 	Threshold    int
 	TotalNodes   int
 	Protocol     string // gg18, gg20, frost
@@ -26,6 +27,7 @@ type WalletKeyMetadata struct {
 	ChainType    string
 	Index        uint32 // 派生索引
 	PublicKey    string
+	ChainCode    string // Hex encoded chain code
 	Address      string
 	Status       string
 	Description  string

@@ -8,6 +8,7 @@ type KeyMetadata struct {
 	PublicKey    string
 	Algorithm    string
 	Curve        string
+	ChainCode    string
 	Threshold    int
 	TotalNodes   int
 	ChainType    string

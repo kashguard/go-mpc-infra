@@ -7,11 +7,12 @@
 package v1
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -481,16 +482,18 @@ func (x *ShareResponse) GetNextRound() int32 {
 
 // 启动 DKG 请求/响应
 type StartDKGRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // DKG 会话ID（等于 key_id）
-	KeyId         string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
-	Algorithm     string                 `protobuf:"bytes,3,opt,name=algorithm,proto3" json:"algorithm,omitempty"` // 例：ECDSA
-	Curve         string                 `protobuf:"bytes,4,opt,name=curve,proto3" json:"curve,omitempty"`         // 例：secp256k1
-	Threshold     int32                  `protobuf:"varint,5,opt,name=threshold,proto3" json:"threshold,omitempty"`
-	TotalNodes    int32                  `protobuf:"varint,6,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"`
-	NodeIds       []string               `protobuf:"bytes,7,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"` // 参与节点列表
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // DKG 会话ID（等于 key_id）
+	KeyId           string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	Algorithm       string                 `protobuf:"bytes,3,opt,name=algorithm,proto3" json:"algorithm,omitempty"` // 例：ECDSA
+	Curve           string                 `protobuf:"bytes,4,opt,name=curve,proto3" json:"curve,omitempty"`         // 例：secp256k1
+	Threshold       int32                  `protobuf:"varint,5,opt,name=threshold,proto3" json:"threshold,omitempty"`
+	TotalNodes      int32                  `protobuf:"varint,6,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"`
+	NodeIds         []string               `protobuf:"bytes,8,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"` // 参与节点列表
+	DerivationPath  string                 `protobuf:"bytes,9,opt,name=derivation_path,json=derivationPath,proto3" json:"derivation_path,omitempty"`
+	ParentChainCode []byte                 `protobuf:"bytes,10,opt,name=parent_chain_code,json=parentChainCode,proto3" json:"parent_chain_code,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StartDKGRequest) Reset() {
@@ -626,17 +629,19 @@ func (x *StartDKGResponse) GetMessage() string {
 
 // 启动签名 请求/响应
 type StartSignRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // 签名会话ID
-	KeyId         string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
-	Message       []byte                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`                         // 要签名的消息
-	MessageHex    string                 `protobuf:"bytes,4,opt,name=message_hex,json=messageHex,proto3" json:"message_hex,omitempty"` // 消息的hex编码（可选）
-	Protocol      string                 `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`                       // "gg18", "gg20", "frost"
-	Threshold     int32                  `protobuf:"varint,6,opt,name=threshold,proto3" json:"threshold,omitempty"`
-	TotalNodes    int32                  `protobuf:"varint,7,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"`
-	NodeIds       []string               `protobuf:"bytes,8,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"` // 参与节点列表
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // 签名会话ID
+	KeyId           string                 `protobuf:"bytes,2,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	Message         []byte                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`                         // 要签名的消息
+	MessageHex      string                 `protobuf:"bytes,4,opt,name=message_hex,json=messageHex,proto3" json:"message_hex,omitempty"` // 消息的hex编码（可选）
+	Protocol        string                 `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`                       // "gg18", "gg20", "frost"
+	Threshold       int32                  `protobuf:"varint,6,opt,name=threshold,proto3" json:"threshold,omitempty"`
+	TotalNodes      int32                  `protobuf:"varint,7,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"`
+	NodeIds         []string               `protobuf:"bytes,8,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"` // 参与节点列表
+	DerivationPath  string                 `protobuf:"bytes,9,opt,name=derivation_path,json=derivationPath,proto3" json:"derivation_path,omitempty"`
+	ParentChainCode []byte                 `protobuf:"bytes,10,opt,name=parent_chain_code,json=parentChainCode,proto3" json:"parent_chain_code,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StartSignRequest) Reset() {
@@ -697,6 +702,13 @@ func (x *StartSignRequest) GetMessageHex() string {
 	return ""
 }
 
+func (x *StartSignRequest) GetDerivationPath() string {
+	if x != nil {
+		return x.DerivationPath
+	}
+	return ""
+}
+
 func (x *StartSignRequest) GetProtocol() string {
 	if x != nil {
 		return x.Protocol
@@ -721,6 +733,13 @@ func (x *StartSignRequest) GetTotalNodes() int32 {
 func (x *StartSignRequest) GetNodeIds() []string {
 	if x != nil {
 		return x.NodeIds
+	}
+	return nil
+}
+
+func (x *StartSignRequest) GetParentChainCode() []byte {
+	if x != nil {
+		return x.ParentChainCode
 	}
 	return nil
 }

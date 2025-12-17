@@ -164,6 +164,85 @@ func TestService_CreateRootKey_2of3(t *testing.T) {
 	mockBackupService.AssertNumberOfCalls(t, "GenerateBackupShares", 3) // 3个MPC分片
 }
 
+func TestService_DeriveWalletKey(t *testing.T) {
+	ctx := context.Background()
+	mockMetadataStore := new(MockMetadataStore)
+	mockKeyShareStorage := new(MockKeyShareStorage)
+	mockProtocolEngine := new(MockProtocolEngine)
+	// mockDKGService := new(MockDKGService) // Unused
+	mockBackupService := new(MockBackupService)
+
+	// Create real DKGService with mocks
+	dkgService := &DKGService{
+		metadataStore:   mockMetadataStore,
+		keyShareStorage: mockKeyShareStorage,
+		protocolEngine:  mockProtocolEngine,
+		MaxWaitTime:     100,
+		PollInterval:    10,
+	}
+
+	service := NewService(mockMetadataStore, mockKeyShareStorage, mockProtocolEngine, dkgService, mockBackupService)
+
+	rootKeyID := "root-key-123"
+	// Compressed public key (33 bytes) hex
+	pubKeyHex := "0339a36013301597daef41fbe593a02cc513d0b55527ec2df1050e2e8ff49c85c2"
+	chainCodeHex := "000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f"
+
+	mockMetadataStore.On("GetKeyMetadata", mock.Anything, rootKeyID).Return(&storage.KeyMetadata{
+		KeyID:     rootKeyID,
+		PublicKey: pubKeyHex,
+		Algorithm: "ECDSA",
+		Curve:     "secp256k1",
+		ChainCode: chainCodeHex,
+		Status:    "Active",
+	}, nil)
+
+	// Capture the saved wallet key to verify ChainCode
+	mockMetadataStore.On("SaveKeyMetadata", mock.Anything, mock.MatchedBy(func(k *storage.KeyMetadata) bool {
+		return k.ChainCode != "" && k.PublicKey != pubKeyHex
+	})).Return(nil)
+
+	req := &DeriveWalletKeyRequest{
+		RootKeyID:   rootKeyID,
+		ChainType:   "ethereum",
+		Index:       0,
+		Description: "Derived Eth Key",
+	}
+
+	derivedKey, err := service.DeriveWalletKey(ctx, req)
+	assert.NoError(t, err)
+	assert.NotNil(t, derivedKey)
+	assert.NotEqual(t, pubKeyHex, derivedKey.PublicKey)
+	assert.NotEmpty(t, derivedKey.ChainCode)
+	
+	// Test migration (missing chain code)
+	mockMetadataStore.On("GetKeyMetadata", mock.Anything, "root-key-migration").Return(&storage.KeyMetadata{
+		KeyID:     "root-key-migration",
+		PublicKey: pubKeyHex,
+		Algorithm: "ECDSA",
+		Curve:     "secp256k1",
+		ChainCode: "", // Missing
+		Status:    "Active",
+	}, nil)
+
+	// Expect update with generated chain code
+	mockMetadataStore.On("UpdateKeyMetadata", mock.Anything, mock.MatchedBy(func(k *storage.KeyMetadata) bool {
+		return k.KeyID == "root-key-migration" && k.ChainCode != ""
+	})).Return(nil)
+
+	reqMigration := &DeriveWalletKeyRequest{
+		RootKeyID:   "root-key-migration",
+		ChainType:   "ethereum",
+		Index:       1,
+	}
+
+	derivedKey2, err := service.DeriveWalletKey(ctx, reqMigration)
+	assert.NoError(t, err)
+	assert.NotNil(t, derivedKey2)
+	assert.NotEqual(t, pubKeyHex, derivedKey2.PublicKey)
+	assert.NotEmpty(t, derivedKey2.ChainCode)
+}
+
 // MockMetadataStore 模拟元数据存储
 type MockMetadataStore struct {
 	mock.Mock
@@ -261,6 +340,32 @@ func (m *MockMetadataStore) GetSigningSession(ctx context.Context, sessionID str
 func (m *MockMetadataStore) UpdateSigningSession(ctx context.Context, session *storage.SigningSession) error {
 	args := m.Called(ctx, session)
 	return args.Error(0)
+}
+
+func (m *MockMetadataStore) SaveBackupShareDelivery(ctx context.Context, delivery *storage.BackupShareDelivery) error {
+	args := m.Called(ctx, delivery)
+	return args.Error(0)
+}
+
+func (m *MockMetadataStore) GetBackupShareDelivery(ctx context.Context, keyID, userID, nodeID string, shareIndex int) (*storage.BackupShareDelivery, error) {
+	args := m.Called(ctx, keyID, userID, nodeID, shareIndex)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.BackupShareDelivery), args.Error(1)
+}
+
+func (m *MockMetadataStore) UpdateBackupShareDeliveryStatus(ctx context.Context, keyID, userID, nodeID string, shareIndex int, status string, reason string) error {
+	args := m.Called(ctx, keyID, userID, nodeID, shareIndex, status, reason)
+	return args.Error(0)
+}
+
+func (m *MockMetadataStore) ListBackupShareDeliveries(ctx context.Context, keyID, nodeID string) ([]*storage.BackupShareDelivery, error) {
+	args := m.Called(ctx, keyID, nodeID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.BackupShareDelivery), args.Error(1)
 }
 
 // MockKeyShareStorage 模拟密钥分片存储

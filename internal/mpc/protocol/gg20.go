@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/kashguard/tss-lib/tss"
 	"github.com/pkg/errors"
 )
@@ -100,6 +102,25 @@ func (p *GG20Protocol) ThresholdSign(ctx context.Context, sessionID string, req 
 		return nil, errors.New("key data not found in record")
 	}
 
+	// 处理密钥派生
+	keyData := record.KeyData
+	if req.DerivationPath != "" {
+		if len(req.ParentChainCode) != 32 {
+			return nil, errors.New("parent chain code required for derivation")
+		}
+
+		log.Info().
+			Str("key_id", req.KeyID).
+			Str("path", req.DerivationPath).
+			Msg("Deriving key share for GG20 signing")
+
+		derivedData, err := DeriveLocalPartySaveData(keyData, req.ParentChainCode, req.DerivationPath)
+		if err != nil {
+			return nil, errors.Wrap(err, "derivation failed")
+		}
+		keyData = derivedData
+	}
+
 	// 解析消息
 	message, err := resolveMessagePayload(req)
 	if err != nil {
@@ -114,7 +135,7 @@ func (p *GG20Protocol) ThresholdSign(ctx context.Context, sessionID string, req 
 		message,
 		req.NodeIDs,
 		p.thisNodeID,
-		record.KeyData,
+		keyData,
 		GG20SigningOptions(),
 	)
 	if err != nil {

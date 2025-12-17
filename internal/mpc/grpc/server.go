@@ -499,10 +499,12 @@ func (s *GRPCServer) StartSign(ctx context.Context, req *pb.StartSignRequest) (*
 			}
 
 			signReq := &protocol.SignRequest{
-				KeyID:      req.KeyId,
-				Message:    msg,
-				MessageHex: req.MessageHex,
-				NodeIDs:    req.NodeIds,
+				KeyID:           req.KeyId,
+				Message:         msg,
+				MessageHex:      req.MessageHex,
+				NodeIDs:         req.NodeIds,
+				DerivationPath:  req.DerivationPath,
+				ParentChainCode: req.ParentChainCode,
 			}
 
 			// 根据请求中的 Protocol 字段选择协议引擎

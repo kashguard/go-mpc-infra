@@ -111,6 +111,8 @@ message StartSignRequest {
   int32 threshold = 6;
   int32 total_nodes = 7;
   repeated string node_ids = 8; // 参与节点列表
+  string derivation_path = 9;   // 派生路径 (e.g. "m/44'/60'/0'/0/0")
+  bytes parent_chain_code = 10; // 根 ChainCode，用于派生
 }
 
 message StartSignResponse {

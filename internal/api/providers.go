@@ -15,6 +15,7 @@ import (
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/coordinator"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/discovery"
 	mpcgrpc "github.com/kashguard/go-mpc-wallet/internal/mpc/grpc"
+	"github.com/kashguard/go-mpc-wallet/internal/mpc/backup"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/key"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/node"
 	"github.com/kashguard/go-mpc-wallet/internal/mpc/protocol"
@@ -314,7 +315,12 @@ func NewKeyServiceProvider(
 	protocolEngine protocol.Engine,
 	dkgService *key.DKGService,
 ) *key.Service {
-	return key.NewService(metadataStore, keyShareStorage, protocolEngine, dkgService)
+	backupStorage, ok := metadataStore.(storage.BackupShareStorage)
+	if !ok {
+		log.Error().Msg("MetadataStore does not implement BackupShareStorage")
+	}
+	backupService := backup.NewService(backupStorage, metadataStore)
+	return key.NewService(metadataStore, keyShareStorage, protocolEngine, dkgService, backupService)
 }
 
 func NewSigningServiceProvider(keyService *key.Service, protocolEngine protocol.Engine, sessionManager *session.Manager, nodeDiscovery *node.Discovery, cfg config.Server, grpcClient *mpcgrpc.GRPCClient) *signing.Service {

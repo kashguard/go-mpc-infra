@@ -2,11 +2,12 @@ package signing
 
 // SignRequest 签名请求
 type SignRequest struct {
-	KeyID       string
-	Message     []byte
-	MessageHex  string
-	MessageType string // transaction, message, raw
-	ChainType   string
+	KeyID          string
+	Message        []byte
+	MessageHex     string
+	MessageType    string // transaction, message, raw
+	ChainType      string
+	DerivationPath string
 }
 
 // SignResponse 签名响应

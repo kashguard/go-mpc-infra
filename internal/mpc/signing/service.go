@@ -209,16 +209,27 @@ func (s *Service) ThresholdSign(ctx context.Context, req *SignRequest) (*SignRes
 		return nil, errors.New("no participating nodes available")
 	}
 
+	var chainCode []byte
+	if keyMetadata.ChainCode != "" {
+		var err error
+		chainCode, err = hex.DecodeString(keyMetadata.ChainCode)
+		if err != nil {
+			log.Warn().Err(err).Str("key_id", req.KeyID).Msg("Failed to decode chain code, derivation may fail")
+		}
+	}
+
 	startSignReq := &pb.StartSignRequest{
-		SessionId:  signingSession.SessionID,
-		KeyId:      req.KeyID,
-		Message:    message,
-		MessageHex: hex.EncodeToString(message),
-		Protocol:   protocolName,
-		Threshold:  int32(keyMetadata.Threshold),
+		SessionId:       signingSession.SessionID,
+		KeyId:           req.KeyID,
+		Message:         message,
+		MessageHex:      hex.EncodeToString(message),
+		Protocol:        protocolName,
+		Threshold:       int32(keyMetadata.Threshold),
 		// total_nodes 使用密钥的 totalNodes，保持与 DKG 配置一致
-		TotalNodes: int32(keyMetadata.TotalNodes),
-		NodeIds:    participatingNodes,
+		TotalNodes:      int32(keyMetadata.TotalNodes),
+		NodeIds:         participatingNodes,
+		DerivationPath:  req.DerivationPath,
+		ParentChainCode: chainCode,
 	}
 
 	log.Info().

@@ -24,7 +24,7 @@ type Service struct {
 	protocolEngine  protocol.Engine
 	dkgService      *DKGService
 	backupService   backup.SSSBackupService
-	// derivationService *DerivationService
+	derivationService *DerivationService
 }
 
 // NewService 创建密钥服务
@@ -36,11 +36,12 @@ func NewService(
 	backupService backup.SSSBackupService,
 ) *Service {
 	return &Service{
-		metadataStore:   metadataStore,
-		keyShareStorage: keyShareStorage,
-		protocolEngine:  protocolEngine,
-		dkgService:      dkgService,
-		backupService:   backupService,
+		metadataStore:     metadataStore,
+		keyShareStorage:   keyShareStorage,
+		protocolEngine:    protocolEngine,
+		dkgService:        dkgService,
+		backupService:     backupService,
+		derivationService: NewDerivationService(),
 	}
 }
 
@@ -306,6 +307,7 @@ func (s *Service) CreateKeyWithExistingMetadata(ctx context.Context, req *Create
 		PublicKey:    storageKey.PublicKey,
 		Algorithm:    storageKey.Algorithm,
 		Curve:        storageKey.Curve,
+		ChainCode:    storageKey.ChainCode,
 		Threshold:    storageKey.Threshold,
 		TotalNodes:   storageKey.TotalNodes,
 		ChainType:    storageKey.ChainType,
@@ -556,11 +558,20 @@ func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) 
 
 	// 保存根密钥元数据
 	now := time.Now()
+	
+	// 生成随机 ChainCode
+	chainCode, err := s.derivationService.GenerateRandomChainCode()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to generate chain code for root key")
+	}
+	chainCodeHex := hex.EncodeToString(chainCode)
+
 	rootKeyMetadata := &RootKeyMetadata{
 		KeyID:        keyID,
 		PublicKey:    dkgResp.PublicKey.Hex,
 		Algorithm:    req.Algorithm,
 		Curve:        req.Curve,
+		ChainCode:    chainCodeHex,
 		Threshold:    threshold,
 		TotalNodes:   totalNodes,
 		Protocol:     req.Protocol,
@@ -577,6 +588,7 @@ func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) 
 		PublicKey:    rootKeyMetadata.PublicKey,
 		Algorithm:    rootKeyMetadata.Algorithm,
 		Curve:        rootKeyMetadata.Curve,
+		ChainCode:    rootKeyMetadata.ChainCode,
 		Threshold:    rootKeyMetadata.Threshold,
 		TotalNodes:   rootKeyMetadata.TotalNodes,
 		ChainType:    "", // 根密钥没有链类型
@@ -656,31 +668,32 @@ func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) 
 	return rootKeyMetadata, nil
 }
 
-// GetRootKey 获取根密钥信息
-func (s *Service) GetRootKey(ctx context.Context, keyID string) (*RootKeyMetadata, error) {
-	storageKey, err := s.metadataStore.GetKeyMetadata(ctx, keyID)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get root key metadata")
-	}
+	// GetRootKey 获取根密钥信息
+	func (s *Service) GetRootKey(ctx context.Context, keyID string) (*RootKeyMetadata, error) {
+		storageKey, err := s.metadataStore.GetKeyMetadata(ctx, keyID)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get root key metadata")
+		}
 
-	rootKeyMetadata := &RootKeyMetadata{
-		KeyID:        storageKey.KeyID,
-		PublicKey:    storageKey.PublicKey,
-		Algorithm:    storageKey.Algorithm,
-		Curve:        storageKey.Curve,
-		Threshold:    storageKey.Threshold,
-		TotalNodes:   storageKey.TotalNodes,
-		Protocol:     "", // TODO: 从存储中读取协议信息
-		Status:       storageKey.Status,
-		Description:  storageKey.Description,
-		Tags:         storageKey.Tags,
-		CreatedAt:    storageKey.CreatedAt,
-		UpdatedAt:    storageKey.UpdatedAt,
-		DeletionDate: storageKey.DeletionDate,
-	}
+		rootKeyMetadata := &RootKeyMetadata{
+			KeyID:        storageKey.KeyID,
+			PublicKey:    storageKey.PublicKey,
+			Algorithm:    storageKey.Algorithm,
+			Curve:        storageKey.Curve,
+			ChainCode:    storageKey.ChainCode,
+			Threshold:    storageKey.Threshold,
+			TotalNodes:   storageKey.TotalNodes,
+			Protocol:     "", // TODO: 从存储中读取协议信息
+			Status:       storageKey.Status,
+			Description:  storageKey.Description,
+			Tags:         storageKey.Tags,
+			CreatedAt:    storageKey.CreatedAt,
+			UpdatedAt:    storageKey.UpdatedAt,
+			DeletionDate: storageKey.DeletionDate,
+		}
 
-	return rootKeyMetadata, nil
-}
+		return rootKeyMetadata, nil
+	}
 
 // DeleteRootKey 删除根密钥
 func (s *Service) DeleteRootKey(ctx context.Context, keyID string) error {
@@ -730,7 +743,7 @@ func (s *Service) DeleteRootKey(ctx context.Context, keyID string) error {
 	return nil
 }
 
-// DeriveWalletKey 派生钱包密钥（Hardened Derivation）
+// DeriveWalletKey 派生钱包密钥（Non-Hardened Derivation based on BIP-32）
 func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyRequest) (*WalletKeyMetadata, error) {
 	// 获取根密钥
 	rootKey, err := s.GetRootKey(ctx, req.RootKeyID)
@@ -738,13 +751,35 @@ func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyReque
 		return nil, errors.Wrap(err, "failed to get root key")
 	}
 
-	// TODO: 实现 Hardened Derivation
-	// 使用 BIP32/BIP44 标准的 Hardened Derivation
-	// 从根密钥的公钥派生钱包密钥的公钥
-	// 这需要实现 derivation 服务
+	// 检查并生成 ChainCode（如果是旧数据可能缺失）
+	chainCodeHex := rootKey.ChainCode
+	if chainCodeHex == "" {
+		if rootKey.Curve == "secp256k1" {
+			log.Info().Str("key_id", rootKey.KeyID).Msg("Migrating root key: generating missing chain code")
+			chainCode, err := s.derivationService.GenerateRandomChainCode()
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to generate chain code")
+			}
+			chainCodeHex = hex.EncodeToString(chainCode)
 
-	// 临时实现：生成钱包ID
-	walletID := "wallet-" + uuid.New().String()
+			// 更新 DB
+			// 需要构造完整的 storage.KeyMetadata 以避免覆盖其他字段
+			storageKey, err := s.metadataStore.GetKeyMetadata(ctx, rootKey.KeyID)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to get raw key metadata for update")
+			}
+			storageKey.ChainCode = chainCodeHex
+			storageKey.UpdatedAt = time.Now()
+
+			if err := s.metadataStore.UpdateKeyMetadata(ctx, storageKey); err != nil {
+				return nil, errors.Wrap(err, "failed to update root key with chain code")
+			}
+			rootKey.ChainCode = chainCodeHex
+		} else {
+			// 其他曲线可能不需要或者我们暂不支持自动生成
+			log.Warn().Str("curve", rootKey.Curve).Msg("Root key missing chain code but curve is not secp256k1, skipping generation")
+		}
+	}
 
 	// 解析根密钥的公钥
 	pubKeyBytes, err := hex.DecodeString(rootKey.PublicKey)
@@ -752,11 +787,27 @@ func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyReque
 		return nil, errors.Wrap(err, "failed to decode root key public key")
 	}
 
-	// TODO: 使用 Hardened Derivation 派生钱包公钥
-	// walletPubKey := deriveHardenedKey(pubKeyBytes, req.ChainType, req.Index)
-	// 暂时使用根密钥的公钥（后续实现真正的派生）
-	walletPubKey := pubKeyBytes
+	// 解析 ChainCode
+	chainCodeBytes, err := hex.DecodeString(chainCodeHex)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode chain code")
+	}
 
+	// 执行派生
+	deriveReq := &DeriveChildKeyRequest{
+		ParentPubKey:    pubKeyBytes,
+		ParentChainCode: chainCodeBytes,
+		Curve:           rootKey.Curve,
+		Index:           req.Index,
+	}
+
+	result, err := s.derivationService.DeriveChildKey(deriveReq)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to derive child key")
+	}
+
+	walletPubKey := result.PublicKey
+	
 	// 生成地址
 	var adapter chain.Adapter
 	switch req.ChainType {
@@ -773,14 +824,17 @@ func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyReque
 		return nil, errors.Wrap(err, "failed to generate wallet address")
 	}
 
-	// 保存钱包密钥元数据
+	// 生成钱包ID
+	walletID := "wallet-" + uuid.New().String()
 	now := time.Now()
+
 	walletMetadata := &WalletKeyMetadata{
 		WalletID:     walletID,
 		RootKeyID:    req.RootKeyID,
 		ChainType:    req.ChainType,
 		Index:        req.Index,
 		PublicKey:    hex.EncodeToString(walletPubKey),
+		ChainCode:    hex.EncodeToString(result.ChainCode),
 		Address:      address,
 		Status:       "Active",
 		Description:  req.Description,
@@ -789,13 +843,20 @@ func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyReque
 		UpdatedAt:    now,
 	}
 
-	// TODO: 实现钱包密钥的存储（需要新的表结构）
-	// 暂时使用根密钥表存储（不推荐，但保持兼容性）
+	// 保存到数据库
+	if walletMetadata.Tags == nil {
+		walletMetadata.Tags = make(map[string]string)
+	}
+	// Record derivation info
+	walletMetadata.Tags["parent_key_id"] = req.RootKeyID
+	walletMetadata.Tags["derivation_index"] = big.NewInt(int64(req.Index)).String()
+
 	storageKey := &storage.KeyMetadata{
-		KeyID:        walletID,
+		KeyID:        walletMetadata.WalletID,
 		PublicKey:    walletMetadata.PublicKey,
-		Algorithm:    rootKey.Algorithm,
-		Curve:        rootKey.Curve,
+		Algorithm:    rootKey.Algorithm, // 继承算法
+		Curve:        rootKey.Curve,     // 继承曲线
+		ChainCode:    hex.EncodeToString(result.ChainCode), // 保存子 ChainCode
 		Threshold:    rootKey.Threshold,
 		TotalNodes:   rootKey.TotalNodes,
 		ChainType:    walletMetadata.ChainType,
@@ -805,7 +866,6 @@ func (s *Service) DeriveWalletKey(ctx context.Context, req *DeriveWalletKeyReque
 		Tags:         walletMetadata.Tags,
 		CreatedAt:    walletMetadata.CreatedAt,
 		UpdatedAt:    walletMetadata.UpdatedAt,
-		DeletionDate: walletMetadata.DeletionDate,
 	}
 
 	if err := s.metadataStore.SaveKeyMetadata(ctx, storageKey); err != nil {

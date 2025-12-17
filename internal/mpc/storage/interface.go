@@ -11,6 +11,7 @@ type KeyMetadata struct {
 	PublicKey    string
 	Algorithm    string
 	Curve        string
+	ChainCode    string // Hex encoded chain code
 	Threshold    int
 	TotalNodes   int
 	ChainType    string

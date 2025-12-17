@@ -79,10 +79,12 @@ type DKGState struct {
 
 // SignRequest 签名请求
 type SignRequest struct {
-	KeyID      string
-	Message    []byte
-	MessageHex string
-	NodeIDs    []string
+	KeyID           string
+	Message         []byte
+	MessageHex      string
+	NodeIDs         []string
+	DerivationPath  string
+	ParentChainCode []byte // Root chain code for derivation
 }
 
 // SignResponse 签名响应

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/pkg/errors"
@@ -28,11 +29,21 @@ func (a *EthereumAdapter) GenerateAddress(pubKey []byte) (string, error) {
 	if len(pubKey) == 0 {
 		return "", errors.New("public key is required")
 	}
-	uncompressed := pubKey
-	if pubKey[0] == 0x04 && len(pubKey) == 65 {
-		uncompressed = pubKey[1:]
+	var uncompressed64 []byte
+	switch {
+	case len(pubKey) == 65 && pubKey[0] == 0x04:
+		uncompressed64 = pubKey[1:]
+	case len(pubKey) == 33 && (pubKey[0] == 0x02 || pubKey[0] == 0x03):
+		key, err := btcec.ParsePubKey(pubKey)
+		if err != nil {
+			return "", errors.Wrap(err, "failed to parse compressed secp256k1 pubkey")
+		}
+		u := key.SerializeUncompressed() // 65 bytes, 0x04 | X | Y
+		uncompressed64 = u[1:]
+	default:
+		return "", errors.Errorf("unsupported public key format: len=%d", len(pubKey))
 	}
-	hash := crypto.Keccak256(uncompressed[len(uncompressed)-64:])
+	hash := crypto.Keccak256(uncompressed64)
 	return fmt.Sprintf("0x%s", hex.EncodeToString(hash[12:])), nil
 }
 
