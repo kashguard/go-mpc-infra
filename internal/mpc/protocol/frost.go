@@ -113,7 +113,7 @@ func (p *FROSTProtocol) GenerateKeyShare(ctx context.Context, req *KeyGenRequest
 	}
 
 	// 转换密钥数据
-	keyShares, publicKey, err := convertFROSTKeyData(keyID, keyData, nodeIDs)
+	keyShares, publicKey, err := convertFROSTKeyData(keyID, keyData, nodeIDs, p.thisNodeID)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert FROST key data")
 	}
@@ -304,6 +304,7 @@ func convertFROSTKeyData(
 	keyID string,
 	saveData *eddsaKeygen.LocalPartySaveData,
 	nodeIDs []string,
+	thisNodeID string,
 ) (map[string]*KeyShare, *PublicKey, error) {
 	keyShares := make(map[string]*KeyShare)
 
@@ -338,12 +339,30 @@ func convertFROSTKeyData(
 	}
 
 	// 为每个节点创建 KeyShare
+	// 注意：在 tss-lib 中，LocalPartySaveData 只包含本地节点的私钥分片 (Xi)
+	// 对于其他节点，我们只有公钥分片 (Ks)
+	// 因此，只有当 NodeID 匹配当前节点时，我们才能设置 Share (私钥分片)
+	// 但在这里，convertFROSTKeyData 是在本地节点执行完 DKG 后调用的
+	// 它返回的 KeyShares map 应该只包含当前节点的 Share
+	// 或者，如果我们要返回 map，那么其他节点的 Share 应该是 nil 或公钥分片？
+	// 按照 DKGService 的逻辑，它只关心当前节点的 Share 用于备份
+	// 所以我们只需要确保当前节点的 Share 被设置
+
+	// 这里的 nodeIDs 是所有参与者的列表
+	// 我们遍历它们，如果是当前节点（thisNodeID），我们提取私钥分片 (Xi)
+
 	for idx, nodeID := range nodeIDs {
 		shareID := fmt.Sprintf("%s-%02d", keyID, idx+1)
+
+		var shareBytes []byte
+		if nodeID == thisNodeID && saveData.Xi != nil {
+			shareBytes = saveData.Xi.Bytes()
+		}
+
 		keyShares[nodeID] = &KeyShare{
 			ShareID: shareID,
 			NodeID:  nodeID,
-			Share:   nil, // 实际应该从 saveData 中提取
+			Share:   shareBytes,
 			Index:   idx + 1,
 		}
 	}

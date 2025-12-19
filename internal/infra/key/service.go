@@ -370,6 +370,12 @@ func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) 
 					continue
 				}
 
+				log.Info().
+					Str("key_id", keyID).
+					Str("node_id", nodeID).
+					Int("generated_shares", len(backupShares)).
+					Msg("Generated SSS backup shares for MPC share")
+
 				// 存储备份分片
 				for i, backupShare := range backupShares {
 					shareIndex := i + 1
@@ -385,6 +391,11 @@ func (s *Service) CreateRootKey(ctx context.Context, req *CreateRootKeyRequest) 
 						// 继续处理其他备份分片
 						continue
 					}
+					log.Info().
+						Str("key_id", keyID).
+						Str("node_id", nodeID).
+						Int("share_index", shareIndex).
+						Msg("Saved SSS backup share")
 				}
 			}
 		}

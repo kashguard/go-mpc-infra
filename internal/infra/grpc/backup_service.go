@@ -82,40 +82,89 @@ func (s *InfrastructureServer) RecoverMPCShare(ctx context.Context, req *pb.Reco
 }
 
 func (s *InfrastructureServer) GetBackupStatus(ctx context.Context, req *pb.GetBackupStatusRequest) (*pb.GetBackupStatusResponse, error) {
-	// TODO: Implement logic to check backup status
-	// For now returning empty list is fine as stub
+	if s.recoveryService == nil {
+		return nil, status.Error(codes.Unimplemented, "Recovery service not available")
+	}
+	if req.KeyId == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	statusMap, err := s.recoveryService.CheckBackupStatus(ctx, req.KeyId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get backup status: %v", err)
+	}
+	statuses := make([]*pb.BackupStatus, 0, len(statusMap))
+	for _, st := range statusMap {
+		statuses = append(statuses, &pb.BackupStatus{
+			NodeId:         st.NodeID,
+			TotalShares:    int32(st.TotalShares),
+			RequiredShares: int32(st.RequiredShares),
+			Recoverable:    st.Recoverable,
+		})
+	}
 	return &pb.GetBackupStatusResponse{
 		KeyId:    req.KeyId,
-		Statuses: []*pb.BackupStatus{},
+		Statuses: statuses,
 	}, nil
 }
 
 func (s *InfrastructureServer) ListBackupShares(ctx context.Context, req *pb.ListBackupSharesRequest) (*pb.ListBackupSharesResponse, error) {
-	// Implement listing logic using s.store
-	storedShares, err := s.store.ListBackupShares(ctx, req.KeyId, req.NodeId)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to list shares: %v", err)
+	// Use recoveryService to access backup storage and follow test expectations
+	if s.recoveryService == nil {
+		return nil, status.Error(codes.Unimplemented, "Recovery service not available")
 	}
 
 	sharesByNode := make(map[string]*pb.BackupShares)
 
-	// Group by NodeID
-	for _, info := range storedShares {
-		nodeGroup, ok := sharesByNode[info.NodeID]
-		if !ok {
-			nodeGroup = &pb.BackupShares{
-				NodeId: info.NodeID,
-				Shares: []*pb.BackupShare{},
-			}
-			sharesByNode[info.NodeID] = nodeGroup
+	// If node_id provided, list that node's shares; otherwise list all nodes
+	if req.NodeId != "" {
+		storedShares, err := s.recoveryService.ListBackupShares(ctx, req.KeyId, req.NodeId)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list shares: %v", err)
 		}
 
-		nodeGroup.Shares = append(nodeGroup.Shares, &pb.BackupShare{
-			KeyId:      info.KeyID,
-			NodeId:     info.NodeID,
-			ShareIndex: int32(info.ShareIndex),
-			CreatedAt:  info.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		})
+		// Group by NodeID (single group)
+		for _, info := range storedShares {
+			nodeGroup, ok := sharesByNode[info.NodeID]
+			if !ok {
+				nodeGroup = &pb.BackupShares{
+					NodeId: info.NodeID,
+					Shares: []*pb.BackupShare{},
+				}
+				sharesByNode[info.NodeID] = nodeGroup
+			}
+
+			nodeGroup.Shares = append(nodeGroup.Shares, &pb.BackupShare{
+				KeyId:      info.KeyID,
+				NodeId:     info.NodeID,
+				ShareIndex: int32(info.ShareIndex),
+				CreatedAt:  info.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			})
+		}
+	} else {
+		allShares, err := s.recoveryService.ListAllBackupShares(ctx, req.KeyId)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list all shares: %v", err)
+		}
+
+		for nodeID, infos := range allShares {
+			nodeGroup, ok := sharesByNode[nodeID]
+			if !ok {
+				nodeGroup = &pb.BackupShares{
+					NodeId: nodeID,
+					Shares: []*pb.BackupShare{},
+				}
+				sharesByNode[nodeID] = nodeGroup
+			}
+
+			for _, info := range infos {
+				nodeGroup.Shares = append(nodeGroup.Shares, &pb.BackupShare{
+					KeyId:      info.KeyID,
+					NodeId:     info.NodeID,
+					ShareIndex: int32(info.ShareIndex),
+					CreatedAt:  info.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				})
+			}
+		}
 	}
 
 	return &pb.ListBackupSharesResponse{

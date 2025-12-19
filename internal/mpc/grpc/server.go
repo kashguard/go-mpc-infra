@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 
 	"github.com/kashguard/go-mpc-infra/internal/config"
+	"github.com/kashguard/go-mpc-infra/internal/infra/backup"
 	"github.com/kashguard/go-mpc-infra/internal/infra/session"
 	"github.com/kashguard/go-mpc-infra/internal/infra/storage"
 	"github.com/kashguard/go-mpc-infra/internal/mpc/protocol"
@@ -58,6 +59,7 @@ type GRPCServer struct {
 	sessionManager   *session.Manager
 	keyShareStorage  storage.KeyShareStorage // 用于存储密钥分片
 	metadataStore    storage.MetadataStore   // 用于读取元数据（策略、公钥）
+	backupService    backup.SSSBackupService // 用于生成备份分片
 	nodeID           string
 	cfg              *ServerConfig
 
@@ -94,9 +96,10 @@ func NewGRPCServer(
 	sessionManager *session.Manager,
 	keyShareStorage storage.KeyShareStorage,
 	metadataStore storage.MetadataStore,
+	backupService backup.SSSBackupService,
 	nodeID string,
 ) *GRPCServer {
-	return NewGRPCServerWithRegistry(cfg, protocolEngine, nil, sessionManager, keyShareStorage, metadataStore, nodeID)
+	return NewGRPCServerWithRegistry(cfg, protocolEngine, nil, sessionManager, keyShareStorage, metadataStore, backupService, nodeID)
 }
 
 // NewGRPCServerWithRegistry 创建gRPC服务端（带协议注册表）
@@ -107,6 +110,7 @@ func NewGRPCServerWithRegistry(
 	sessionManager *session.Manager,
 	keyShareStorage storage.KeyShareStorage,
 	metadataStore storage.MetadataStore,
+	backupService backup.SSSBackupService,
 	nodeID string,
 ) *GRPCServer {
 	serverCfg := &ServerConfig{
@@ -126,6 +130,7 @@ func NewGRPCServerWithRegistry(
 		sessionManager:   sessionManager,
 		keyShareStorage:  keyShareStorage,
 		metadataStore:    metadataStore,
+		backupService:    backupService,
 		nodeID:           nodeID,
 		cfg:              serverCfg,
 	}
@@ -292,6 +297,42 @@ func (s *GRPCServer) StartDKG(ctx context.Context, req *pb.StartDKGRequest) (*pb
 								Str("node_id", nodeID).
 								Str("this_node_id", s.nodeID).
 								Msg("Key share stored successfully in StartDKG RPC goroutine")
+
+							// 生成并保存SSS备份分片
+							if s.backupService != nil && s.metadataStore != nil {
+								backupStorage, ok := s.metadataStore.(storage.BackupShareStorage)
+								if ok {
+									// 对该MPC分片生成SSS备份分片 (默认 3-of-5 备份策略)
+									// TODO: 从配置或请求中获取备份策略
+									backupShares, err := s.backupService.GenerateBackupShares(keygenCtx, share.Share, 3, 5)
+									if err != nil {
+										log.Error().
+											Err(err).
+											Str("key_id", req.KeyId).
+											Str("node_id", nodeID).
+											Msg("Failed to generate backup shares")
+									} else {
+										for i, bs := range backupShares {
+											// 这里的 shareIndex 是 SSS 分片的索引 (1-based)
+											if err := backupStorage.SaveBackupShare(keygenCtx, req.KeyId, nodeID, i+1, bs.ShareData); err != nil {
+												log.Error().
+													Err(err).
+													Str("key_id", req.KeyId).
+													Str("node_id", nodeID).
+													Int("share_index", i+1).
+													Msg("Failed to save backup share")
+											}
+										}
+										log.Info().
+											Str("key_id", req.KeyId).
+											Str("node_id", nodeID).
+											Int("count", len(backupShares)).
+											Msg("Generated and saved SSS backup shares")
+									}
+								} else {
+									log.Warn().Msg("MetadataStore does not implement BackupShareStorage, skipping backup")
+								}
+							}
 						}
 					}
 				} else {
@@ -847,6 +888,42 @@ func (s *GRPCServer) handleProtocolMessage(ctx context.Context, sessionID string
 										Str("node_id", nodeID).
 										Str("this_node_id", s.nodeID).
 										Msg("Key share stored successfully in auto-start goroutine")
+
+									// 生成并保存SSS备份分片
+									if s.backupService != nil && s.metadataStore != nil {
+										backupStorage, ok := s.metadataStore.(storage.BackupShareStorage)
+										if ok {
+											// 对该MPC分片生成SSS备份分片 (默认 3-of-5 备份策略)
+											// TODO: 从配置或请求中获取备份策略
+											backupShares, err := s.backupService.GenerateBackupShares(keygenCtx, share.Share, 3, 5)
+											if err != nil {
+												log.Error().
+													Err(err).
+													Str("key_id", sess.KeyID).
+													Str("node_id", nodeID).
+													Msg("Failed to generate backup shares")
+											} else {
+												for i, bs := range backupShares {
+													// 这里的 shareIndex 是 SSS 分片的索引 (1-based)
+													if err := backupStorage.SaveBackupShare(keygenCtx, sess.KeyID, nodeID, i+1, bs.ShareData); err != nil {
+														log.Error().
+															Err(err).
+															Str("key_id", sess.KeyID).
+															Str("node_id", nodeID).
+															Int("share_index", i+1).
+															Msg("Failed to save backup share")
+													}
+												}
+												log.Info().
+													Str("key_id", sess.KeyID).
+													Str("node_id", nodeID).
+													Int("count", len(backupShares)).
+													Msg("Generated and saved SSS backup shares")
+											}
+										} else {
+											log.Warn().Msg("MetadataStore does not implement BackupShareStorage, skipping backup")
+										}
+									}
 								}
 							}
 						} else {

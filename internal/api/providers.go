@@ -142,6 +142,7 @@ func NewMPCGRPCServer(
 	keyShareStorage storage.KeyShareStorage,
 	grpcClient *mpcgrpc.GRPCClient,
 	metadataStore storage.MetadataStore,
+	backupService backup.SSSBackupService,
 ) (*mpcgrpc.GRPCServer, error) {
 	nodeID := cfg.MPC.NodeID
 	if nodeID == "" {
@@ -175,7 +176,7 @@ func NewMPCGRPCServer(
 	registry.Register("gg20", gg20Engine)
 	registry.Register("frost", frostEngine)
 
-	return mpcgrpc.NewGRPCServerWithRegistry(cfg, protocolEngine, registry, sessionManager, keyShareStorage, metadataStore, nodeID), nil
+	return mpcgrpc.NewGRPCServerWithRegistry(cfg, protocolEngine, registry, sessionManager, keyShareStorage, metadataStore, backupService, nodeID), nil
 }
 
 func NewProtocolEngine(cfg config.Server, grpcClient *mpcgrpc.GRPCClient, keyShareStorage storage.KeyShareStorage) protocol.Engine {
