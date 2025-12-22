@@ -22,7 +22,7 @@
 ## 2. 技术栈与架构
 
 - **语言**: Go (Golang) 1.23+
-- **框架**: Gin (HTTP), gRPC (Client)
+- **框架**: Echo (HTTP), gRPC (Client)
 - **数据库**: PostgreSQL
 - **ORM**: GORM 或 sqlx
 - **配置**: Viper
@@ -39,7 +39,7 @@ go-mpc-vault/
 │   └── server/
 │       └── main.go              # 服务入口
 ├── internal/
-│   ├── api/                     # HTTP 接口层 (Gin Handlers)
+│   ├── api/                     # HTTP 接口层 (Echo Handlers)
 │   │   ├── middleware/          # 中间件 (Auth, CORS)
 │   │   ├── v1/                  # V1 API
 │   │   └── router.go            # 路由配置
@@ -120,7 +120,8 @@ CREATE TABLE chains (
     name VARCHAR(100) NOT NULL,        -- e.g. 'Ethereum Mainnet'
     type VARCHAR(20) NOT NULL,         -- 'EVM', 'UTXO', 'SOLANA'
     chain_id VARCHAR(50),              -- 链 ID, e.g. '1', 'solana-mainnet'
-    curve VARCHAR(50) NOT NULL,        -- 'secp256k1', 'ed25519' (用于自动匹配 Vault Key)
+    algorithm VARCHAR(50) NOT NULL,    -- 'ECDSA', 'EdDSA', 'Schnorr' (用于自动匹配 Vault Key)
+    curve VARCHAR(50) NOT NULL,        -- 'secp256k1', 'ed25519'
     currency_symbol VARCHAR(20) NOT NULL, -- 'ETH', 'BTC', 'SOL'
     rpc_url TEXT,
     explorer_url TEXT,
@@ -476,7 +477,7 @@ service MPCManagement {
     - 实现 `SigningService` (包含 审批逻辑 和 触发签名逻辑)。
 
 5.  **API 接口层**:
-    - 使用 Gin 编写 Handler。
+    - 使用 Echo 编写 Handler。
     - 绑定 Request DTO，验证参数。
     - 调用 Service 层，返回 Response DTO。
 
