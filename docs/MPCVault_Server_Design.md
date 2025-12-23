@@ -576,3 +576,101 @@ curl -X POST https://vault.example.com/api/v1/requests/{id}/approve \
 - 所有节点间 gRPC 启用 TLS，证书在 `docker-compose.yml` 中配置（`MPC_TLS_*`，见 `docker-compose.yml:69-73`）。
 - 客户端加载 CA 与可选客户端证书（见 `internal/mpc/grpc/client.go:146-186`）。
 - 若缺少客户端证书，确保服务端仅要求单向 TLS；若启用 mTLS，必须提供客户端证书与私钥。
+
+### 8.4 REST 接口示例与字段规范
+- 创建金库
+  - `POST /api/v1/vaults`
+  - 请求体：
+    - `name`: 金库名称
+    - `threshold`: 审批阈值（业务层）
+    - `chains`: 需要支持的链集合（用于派生钱包）
+  - 头部需携带 Passkey 验证头（见 8.3）
+  - 结果：返回 `vault_id`，并异步跟踪 DKG 产生的 `key_id`（通过后台调用 `KeyService.CreateRootKey`，参考 `internal/infra/grpc/key_service.go:15-68`）
+- 派生钱包
+  - `POST /api/v1/vaults/:id/wallets`
+  - 请求体：
+    - `chain_id`, `derive_index`
+  - 结果：返回 `wallet_id`, `address`, `key_id`
+- 发起签名请求
+  - `POST /api/v1/vaults/:id/sign`
+  - 请求体：
+    - `wallet_id`, `tx_data`（或 `message_hex`）, `to_address`, `amount`
+  - 结果：返回 `request_id`，状态为 `pending`
+- 审批签名请求
+  - `POST /api/v1/requests/:id/approve`
+  - 请求体：`action` = `approve | reject`, `comment`
+  - 头部需携带 Passkey 验证头（见 8.3）
+  - 结果：返回当前累计审批数与是否达到阈值
+- 触发阈值签名（由服务端在达到阈值与风控通过后触发）
+  - 后端聚合 `AuthToken[]` 并调用 Infra `SigningService.ThresholdSign`（`proto/infra/v1/signing.proto:38-58`；实现调用见 `internal/infra/grpc/signing_service.go:83-103`）
+  - 结果：`signature`, `public_key`, `participating_nodes`
+
+字段设计建议：
+- `amount` 使用 `DECIMAL(36,18)` 存储，接口层采用字符串表示以避免浮点误差。
+- `tx_data` 推荐使用十六进制字符串或原始字节的 Base64URL。
+- 所有返回时间字段使用 ISO8601 字符串（`time.RFC3339`，参考 `internal/infra/grpc/*:41-47` 等）。
+
+### 8.5 风控执行伪代码
+```go
+func CheckRiskAndTransition(ctx context.Context, reqID UUID) error {
+  req := LoadSigningRequest(ctx, reqID)
+  // 1. 白名单
+  if !IsWhitelisted(req.OrganizationID, req.ChainID, req.ToAddress) {
+    if Policy(req.VaultID).ActionOnNonWhitelist == "REJECT" {
+      UpdateStatus(reqID, "rejected")
+      return ErrNonWhitelist
+    }
+    RequireRoleApproval(reqID, "admin")
+  }
+  // 2. 限额窗口
+  limits := LoadSpendingLimits(req.VaultID, req.AssetOrUSD)
+  sum := SumWithdrawalsInWindow(req.VaultID, req.AssetOrUSD, limits.WindowSeconds)
+  if sum+req.Amount > limits.Amount {
+    if limits.Action == "REJECT" {
+      UpdateStatus(reqID, "rejected")
+      return ErrLimitExceeded
+    }
+    RequireRoleApproval(reqID, "admin")
+  }
+  // 3. 合规检查（黑名单等）
+  if IsRiskAddress(req.ToAddress) {
+    RequireRoleApproval(reqID, "admin")
+  }
+  // 4. 阈值满足则进入 signing
+  if ApprovalsSatisfied(reqID, Threshold(req.VaultID)) {
+    UpdateStatus(reqID, "signing")
+    tokens := AggregateAuthTokens(reqID)
+    // 调用 Infra 阈值签名
+    resp := Infra.SigningService.ThresholdSign({
+      KeyId: ResolveKeyID(req.WalletID),
+      MessageHex: req.MessageHex,
+      ChainType: req.ChainType,
+      AuthTokens: tokens,
+    })
+    PersistSignature(reqID, resp.Signature, resp.SignedAt)
+    UpdateStatus(reqID, "signed")
+    return nil
+  }
+  return nil
+}
+```
+实现参考：
+- gRPC 错误码与映射：`google.golang.org/grpc/codes` 使用见 `internal/infra/grpc/signing_service.go:86-88`, `internal/infra/grpc/key_service.go:41-43, 74-75`。
+- 时间与格式化：`time.RFC3339` 使用见 `internal/infra/grpc/*:41-47, 58-65, 89-96`。
+
+### 8.6 Challenge 规范强化与防重放
+- 交易类：`Base64URL(SHA256(RawTransactionBytes))`（见 4.7）
+- 管理类（含时间戳/随机数）：`Base64URL(SHA256(key_id|session_id|algorithm|curve|threshold|total_nodes|sorted_node_ids|timestamp))`
+- 服务端维护 `challenge` 的使用窗口与一次性标记（nonce 存储），过期或复用则拒绝。
+- 校验 `origin`（允许来源列表），并记录设备指纹与 `credential_id`。
+
+### 8.7 错误处理与返回码约定
+- REST：
+  - 401 未认证，403 无权限，400 参数错误，409 并发/幂等冲突，422 验证失败（Passkey/风控），500 服务异常。
+- gRPC：
+  - 使用 `codes.InvalidArgument`（参数错误）、`codes.PermissionDenied`（权限）、`codes.Unauthenticated`（认证）、`codes.FailedPrecondition`（风控不通过）、`codes.Internal`（服务异常）。
+  - 参考实现：`internal/infra/grpc/signing_service.go:86-88`, `internal/infra/grpc/key_service.go:41-43, 74-75, 131-132, 179-180`。
+
+### 8.8 审计日志扩展
+- 记录字段：`action`, `resource_type`, `resource_id`, `user_id`, `origin`, `device_info`, `details(JSONB)`。
+- 对关键动作（创建金库、审批、签名触发）记录请求上下文与策略命中情况（如白名单命中、限额超额、风控升级）。
