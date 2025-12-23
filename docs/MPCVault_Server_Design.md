@@ -2,7 +2,7 @@
 
 **版本**: v1.1
 **日期**: 2025-12-23
-**建议项目路径**: `/Users/caimin/Desktop/kms/go-mpc-wault`
+**建议项目路径**: `/Users/caimin/Desktop/kms/go-mpc-Vault`
 **目标**: 构建面向 B 端团队的 MPC 钱包管理服务（应用层），基于 `go-mpc-infra` 基础设施层。
 
 ---
