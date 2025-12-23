@@ -2,7 +2,11 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -45,9 +49,12 @@ func NewGRPCClient(cfg config.Server, nodeManager *node.Manager) (*GRPCClient, e
 	// DKG 协议可能需要较长时间（几分钟），设置更长的超时时间
 	// KeepAlive Timeout 设置为 10 分钟，确保长运行的 RPC 调用不会被中断
 	clientCfg := &ClientConfig{
-		TLSEnabled: cfg.MPC.TLSEnabled,
-		Timeout:    10 * time.Minute, // 增加到 10 分钟
-		KeepAlive:  10 * time.Minute, // 增加到 10 分钟
+		TLSEnabled:    cfg.MPC.TLSEnabled,
+		TLSCertFile:   cfg.MPC.TLSCertFile,
+		TLSKeyFile:    cfg.MPC.TLSKeyFile,
+		TLSCACertFile: cfg.MPC.TLSCACertFile,
+		Timeout:       10 * time.Minute, // 增加到 10 分钟
+		KeepAlive:     10 * time.Minute, // 增加到 10 分钟
 	}
 
 	thisNodeID := cfg.MPC.NodeID
@@ -138,11 +145,44 @@ func (c *GRPCClient) getOrCreateConnection(ctx context.Context, nodeID string) (
 
 	// TLS配置
 	if c.cfg.TLSEnabled {
-		creds, err := credentials.NewClientTLSFromFile(c.cfg.TLSCACertFile, "")
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to load TLS credentials")
+		caPath := c.cfg.TLSCACertFile
+		if caPath == "" {
+			if envPath := os.Getenv("MPC_TLS_CA_CERT_FILE"); envPath != "" {
+				caPath = envPath
+			} else {
+				caPath = "/app/certs/ca.crt"
+			}
 		}
-		opts = append(opts, grpc.WithTransportCredentials(creds))
+		certFile := c.cfg.TLSCertFile
+		keyFile := c.cfg.TLSKeyFile
+
+		caBytes, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to load TLS CA certificate")
+		}
+		rootCAs := x509.NewCertPool()
+		if ok := rootCAs.AppendCertsFromPEM(caBytes); !ok {
+			return nil, errors.New("failed to append CA certificate")
+		}
+
+		tlsCfg := &tls.Config{
+			RootCAs:    rootCAs,
+			MinVersion: tls.VersionTLS12,
+		}
+
+		if certFile != "" && keyFile != "" {
+			clientCert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to load client certificate/key")
+			}
+			tlsCfg.Certificates = []tls.Certificate{clientCert}
+		}
+
+		if host, _, err := net.SplitHostPort(nodeInfo.Endpoint); err == nil && host != "" {
+			tlsCfg.ServerName = host
+		}
+
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	} else {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
@@ -156,7 +196,7 @@ func (c *GRPCClient) getOrCreateConnection(ctx context.Context, nodeID string) (
 
 	// 建立连接
 	log.Debug().Str("node_id", nodeID).Str("endpoint", nodeInfo.Endpoint).Msg("Dialing gRPC node")
-	conn, err := grpc.NewClient(nodeInfo.Endpoint, opts...)
+	conn, err := grpc.DialContext(ctx, nodeInfo.Endpoint, opts...)
 	if err != nil {
 		log.Error().Err(err).Str("node_id", nodeID).Str("endpoint", nodeInfo.Endpoint).Msg("Failed to connect to gRPC node")
 		return nil, errors.Wrapf(err, "failed to connect to node %s at %s", nodeID, nodeInfo.Endpoint)
