@@ -2,7 +2,7 @@
 
 ## 1. 方案概述
 
-本方案旨在解决在 **2-of-3 门限签名** 场景下，用户端（APP）**不具备运行完整 MPC 协议能力**（无法参与 DKG 和 MPC 签名计算），但仍需保证**资金控制权**属于用户，且运营方无法单方挪用资产的问题。
+本方案旨在解决在 **2-of-3 门限签名** 场景下，用户端（APP）**不具备运行完整 MPC 协议能力**（无法参与 DKG 和 MPC 签名计算），但仍需保证**资金控制权**属于用户，且运营方无法单方挪用资产的问题。当前实现采用 **Passkey (WebAuthn)** 作为用户侧的授权凭证与二次确认机制。
 
 方案的核心思想是引入 **“鉴权代理 (Guardian Node)”** 角色，将用户对资产的控制权转化为“数字签名指令”，由代理节点验证指令后代为执行 MPC 计算。
 
@@ -20,7 +20,7 @@
 
 ### 3.1 注册绑定流程 (Setup)
 
-用户首次使用时，需将 APP 生成的控制密钥与鉴权代理进行绑定。
+用户首次使用时，通过 **WebAuthn 注册** 生成 Passkey，并将 `credential_id` 与 `public_key (COSE)` 绑定到鉴权代理策略。
 
 ```mermaid
 sequenceDiagram
@@ -29,8 +29,8 @@ sequenceDiagram
     participant Guardian as 鉴权代理 (Node B)
     participant Chain as 存证/数据库
 
-    Note over User: 1. 生成控制密钥对 (User_Auth_Key)<br/>(普通非对称密钥，如 Ed25519)
-    User->>Operator: 2. 提交注册请求 (含 User_Auth_Pub)
+    Note over User: 1. WebAuthn 注册 (Passkey)<br/>生成 credential_id 与 public_key (COSE)
+    User->>Operator: 2. 提交注册完成数据 (credential_id, public_key, attestation)
     Operator->>Guardian: 3. 同步用户注册信息
     Guardian->>Guardian: 4. 绑定策略: WalletID <-> User_Auth_Pub
     Guardian-->>Operator: 确认绑定成功
@@ -41,7 +41,7 @@ sequenceDiagram
 
 ### 3.2 交易签名流程 (Transaction Signing)
 
-这是日常转账的核心流程。用户仅需进行轻量级签名，复杂的 MPC 计算在云端完成。
+这是日常转账的核心流程。用户在本地设备上完成 **WebAuthn Assertion** 轻量签名，复杂的 MPC 计算在云端完成。
 
 ```mermaid
 sequenceDiagram
@@ -53,7 +53,7 @@ sequenceDiagram
 
     Note over User: 用户发起转账请求
 
-    User->>User: 1. 签署交易指令<br/>Sign(TxHash) -> Auth_Token<br/>(使用 User_Auth_Key)
+    User->>User: 1. WebAuthn 生成 Assertion<br/>对 Challenge(TxHash/Nonce) 签名 -> AuthToken<br/>(使用 Passkey)
     User->>Operator: 2. 发送交易请求 + Auth_Token
 
     Note over Operator: 3. 业务检查 (余额/风控)
@@ -63,8 +63,8 @@ sequenceDiagram
     
     rect rgb(240, 248, 255)
         Note over Guardian: **安全核心步骤**
-        Guardian->>Guardian: A. 验证 Auth_Token 签名有效性
-        Guardian->>Guardian: B. 验证 TxInfo 与 Token 内容一致
+        Guardian->>Guardian: A. 验证 Passkey Assertion 有效性 (credential_id, signature, authenticator_data, client_data_json, rpId/origin)
+        Guardian->>Guardian: B. 验证 TxInfo 与 Challenge 内容一致 (防重放)
         Guardian->>Guardian: C. 执行风控策略 (限额/白名单)
     end
 
@@ -127,16 +127,16 @@ flowchart TD
     *   **效果**：即使拥有服务器 Root 权限，也无法读取内存中的 Share 2，也无法篡改验证代码逻辑。
 
 ### 4.2 为什么用户端是安全的？
-*   **私钥不离身**：`User_Auth_Key` 始终在用户手机的安全区域（Secure Enclave / KeyStore）中，仅用于签署指令，不参与复杂的 MPC 交互。
-*   **所见即所签**：APP 端展示交易详情供用户确认，签名针对该特定交易，防止重放攻击。
+*   **私钥不离身**：Passkey 私钥由设备安全硬件（Secure Enclave/KeyStore）托管，仅用于生成 WebAuthn Assertion，不参与复杂 MPC 交互。
+*   **所见即所签**：APP 展示交易详情，Challenge 绑定交易 Hash/Nonce/时间窗，结合 WebAuthn 的 `origin` 校验，防重放与跨域伪造。
 
 ## 5. 扩展方案：团队多签 (Team Multisig)
 
-在 Delegated Guardian 架构下实现团队多签（如 2-of-3 人员审批），**不需要**部署链上多签合约，也**不需要**改变底层的 MPC 门限（保持 2-of-3 分片）。核心逻辑是升级 Guardian 的验证策略。
+在 Delegated Guardian 架构下实现团队多签（如 2-of-3 人员审批），**不需要**部署链上多签合约，也**不需要**改变底层的 MPC 门限（保持 2-of-3 分片）。核心逻辑是升级 Guardian 的验证策略：收集 **N 个 Passkey Assertion** 满足阈值后再参与 MPC。
 
 ### 5.1 核心理念：链下策略聚合
-*   **原个人模式**：Guardian 见 **1** 个有效用户签名即放行 Share 2。
-*   **新团队模式**：Guardian 见齐 **N** 个有效团队成员签名才放行 Share 2。
+*   **原个人模式**：Guardian 见 **1** 个有效 Passkey Assertion 即放行 Share 2。
+*   **新团队模式**：Guardian 见齐 **N** 个有效团队成员的 Passkey Assertion 才放行 Share 2。
 
 ### 5.2 流程设计
 

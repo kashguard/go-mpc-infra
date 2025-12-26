@@ -8,7 +8,7 @@
 
 1.  **用户管理解耦**：基础设施层（Infrastructure Layer）不再感知或存储用户信息（`user_id`），仅提供纯粹的 MPC 密钥生成与签名能力。用户身份、租户关系、组织架构完全由应用层（Application Layer）管理。
 2.  **固定节点角色**：废弃动态生成 `client-{userID}` 节点的模式，改为系统级固定的 3 个 MPC 参与方，对应 **2-of-3 Delegated Guardian** 模型。
-3.  **端到端认证**：应用层与基础设施层之间采用 E2E 认证（mTLS + 可选 JWT），而非传递用户 ID。
+3.  **端到端认证**：应用层与基础设施层之间采用 E2E 认证（mTLS + 可选 JWT），而非传递用户 ID；用户层面的操作确认改为 **Passkey (WebAuthn)**，由 Guardian 验证 Assertion 后再参与签名。
 
 ## 2. 架构变更
 
